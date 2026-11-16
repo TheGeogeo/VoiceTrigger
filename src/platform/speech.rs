@@ -36,8 +36,7 @@ pub fn diagnostic() -> Result<String> {
             let name = token
                 .GetStringValue(PCWSTR::null())
                 .map_err(|e| e.to_string())?;
-            let text = name.to_string().unwrap_or_default();
-            CoTaskMemFree(Some(name.0.cast()));
+            let text = take_string(name);
             report.push_str(&format!("\n- {text}"));
         }
         Ok(report)
@@ -63,9 +62,40 @@ pub enum SpeechEvent {
 }
 
 unsafe fn take_string(text: PWSTR) -> String {
+    // SAPI can report success without returning text for an empty result.
+    // PWSTR::to_string calls wcslen and requires a non-null pointer.
+    if text.is_null() {
+        return String::new();
+    }
     let value = text.to_string().unwrap_or_default();
     CoTaskMemFree(Some(text.0.cast()));
     value
+}
+
+unsafe fn take_rule(phrase: *mut SPPHRASE) -> Option<(u32, i8)> {
+    // GetPhrase explicitly permits NULL when no phrase was recognized.
+    let phrase_data = phrase.as_ref()?;
+    let rule = (phrase_data.Base.Rule.ulId, phrase_data.Base.Rule.Confidence);
+    CoTaskMemFree(Some(phrase.cast()));
+    Some(rule)
+}
+
+fn phrase_event(id: i32, rule: u32, confidence: i8, text: String) -> SpeechEvent {
+    if text.trim().is_empty() {
+        SpeechEvent::Trace("Speech result contained no text; no trigger was run.".into())
+    } else if id == SPEI_RECOGNITION.0 && rule > 0 && confidence >= 0 {
+        SpeechEvent::Recognized {
+            index: rule as usize - 1,
+            text,
+            confidence,
+        }
+    } else if id == SPEI_HYPOTHESIS.0 {
+        SpeechEvent::Trace(format!("Partial match: {text}"))
+    } else {
+        SpeechEvent::Trace(format!(
+            "Rejected: {text} (confidence {confidence}; a trigger needs 0 or 1)."
+        ))
+    }
 }
 
 fn default_audio_input() -> Result<ISpObjectToken> {
@@ -259,25 +289,17 @@ impl Listener {
                     if let Some(object) = object {
                         let result: ISpRecoResult = object.cast().map_err(|e| e.to_string())?;
                         let phrase = result.GetPhrase().map_err(|e| e.to_string())?;
-                        let rule = (*phrase).Base.Rule.ulId;
-                        let confidence = (*phrase).Base.Rule.Confidence;
-                        CoTaskMemFree(Some(phrase.cast()));
+                        let Some((rule, confidence)) = take_rule(phrase) else {
+                            output.push(SpeechEvent::Trace(
+                                "Speech result contained no phrase; no trigger was run.".into(),
+                            ));
+                            continue;
+                        };
                         let mut text = PWSTR::null();
-                        result
-                            .GetText(0, u32::MAX, true, &mut text, None)
-                            .map_err(|e| e.to_string())?;
+                        let status = result.GetText(0, u32::MAX, true, &mut text, None);
                         let text = take_string(text);
-                        if id == SPEI_RECOGNITION.0 && rule > 0 && confidence >= 0 {
-                            output.push(SpeechEvent::Recognized {
-                                index: rule as usize - 1,
-                                text,
-                                confidence,
-                            });
-                        } else if id == SPEI_HYPOTHESIS.0 {
-                            output.push(SpeechEvent::Trace(format!("Partial match: {text}")));
-                        } else {
-                            output.push(SpeechEvent::Trace(format!("Rejected: {text} (confidence {confidence}; a trigger needs 0 or 1).")));
-                        }
+                        status.map_err(|e| e.to_string())?;
+                        output.push(phrase_event(id, rule, confidence, text));
                     } else {
                         output.push(SpeechEvent::Trace(
                             "Speech detected, but no configured phrase matched.".into(),
@@ -343,6 +365,86 @@ fn pronunciations(phrase: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_sapi_text_is_empty() {
+        assert!(unsafe { take_string(PWSTR::null()) }.is_empty());
+    }
+
+    #[test]
+    fn null_sapi_phrase_has_no_rule() {
+        assert_eq!(unsafe { take_rule(std::ptr::null_mut()) }, None);
+    }
+
+    #[test]
+    fn empty_results_never_dispatch_a_trigger() {
+        for id in [SPEI_RECOGNITION, SPEI_HYPOTHESIS, SPEI_FALSE_RECOGNITION] {
+            for text in ["", " \t\r\n"] {
+                assert!(matches!(
+                    phrase_event(id.0, 1, 1, text.into()),
+                    SpeechEvent::Trace(_)
+                ));
+            }
+        }
+        assert!(matches!(
+            phrase_event(SPEI_RECOGNITION.0, 1, -1, "Ok GPT".into()),
+            SpeechEvent::Trace(_)
+        ));
+        assert!(matches!(
+            phrase_event(SPEI_RECOGNITION.0, 1, 1, "Ok GPT".into()),
+            SpeechEvent::Recognized { index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn owned_sapi_data_is_read_before_being_freed() {
+        use windows::Win32::System::Com::CoTaskMemAlloc;
+        unsafe {
+            let text = wide("Ok GPT — gé pé té");
+            let pointer = CoTaskMemAlloc(text.len() * std::mem::size_of::<u16>()).cast::<u16>();
+            assert!(!pointer.is_null());
+            std::ptr::copy_nonoverlapping(text.as_ptr(), pointer, text.len());
+            assert_eq!(take_string(PWSTR(pointer)), "Ok GPT — gé pé té");
+
+            let pointer = CoTaskMemAlloc(std::mem::size_of::<SPPHRASE>()).cast::<SPPHRASE>();
+            assert!(!pointer.is_null());
+            let mut phrase = SPPHRASE::default();
+            phrase.Base.Rule.ulId = 3;
+            phrase.Base.Rule.Confidence = 1;
+            pointer.write(phrase);
+            assert_eq!(take_rule(pointer), Some((3, 1)));
+        }
+    }
+
+    #[test]
+    #[ignore = "Runs the real microphone for 220 seconds and restarts SAPI; does not run actions"]
+    fn listener_survives_extended_audio_and_restarts() {
+        use std::time::{Duration, Instant};
+        let _com = crate::platform::Com::new().unwrap();
+        for debug in [true, false] {
+            let mut listener = Listener::new(&Settings::default()).unwrap();
+            listener.set_debug(debug).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(110);
+            let mut levels = 0;
+            while Instant::now() < deadline {
+                for event in listener
+                    .poll()
+                    .expect("Sustained recognition must remain healthy")
+                {
+                    if matches!(event, SpeechEvent::AudioLevel(_)) {
+                        levels += 1;
+                    }
+                }
+            }
+            if debug {
+                assert!(
+                    levels > 100,
+                    "Live microphone events must continue during the soak"
+                );
+            }
+            println!("SAPI soak: debug={debug}, duration=110s, audio level events={levels}");
+        }
+    }
 
     #[test]
     fn expands_standalone_gpt_acronym_without_rewriting_other_words() {

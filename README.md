@@ -61,6 +61,8 @@ cargo test --locked -- --include-ignored --test-threads=1
 
 These checks include real input attachment, live audio events, synthetic phrase dispatch, accessible recording controls, and a silence monitor running alongside ChatGPT. Text emulation does not establish real spoken accuracy. Tests neither inspect existing user drafts nor send a message to ChatGPT.
 
+The full suite also includes a 220-second microphone soak with a recognizer restart. Empty SAPI phrase/text results are ignored safely; see [unexpected termination diagnostics](doc/debug.md#unexpected-application-termination) if an application crash persists.
+
 `Cargo.lock` is versioned for reproducible application builds. The command-line diagnostic writes a `.diagnostic.txt` file next to the selected configuration. The release executable is a GUI application, so use this file to read the report.
 
 License: [MIT](LICENSE).

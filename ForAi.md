@@ -18,6 +18,7 @@ Build an economical Windows background application in Rust. A user-defined spoke
 - Keep wake-trigger recognition local through SAPI. Do not add continuous rendering or a second permanent waveform capture at idle.
 - Keep UI Automation scoped to ChatGPT. Do not introduce coordinate-based app integration or global keyboard shortcuts.
 - Treat SAPI confidence `1` as high confidence, not an error. Confirm real recording controls before announcing readiness. The French `Arrêter la dictée` control confirms recording for transcription; `Annuler la dictée` cancels it.
+- Treat SAPI phrase and text pointers as nullable even after a successful HRESULT. Check before reading or converting them, release owned COM allocations, and never dispatch a trigger for an empty result. Keep regression checks for this native crash boundary.
 - The factory phrase is “Ok GPT”. Changing the factory default must preserve existing saved custom triggers.
 - Update the relevant documentation in `doc/` as implementation advances.
 - Check `.gitignore` and the actual staged files before publication. `ForAi.md` is intentionally versioned; other excluded local AI files must remain excluded.
