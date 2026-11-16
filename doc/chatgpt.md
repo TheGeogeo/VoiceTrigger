@@ -1,25 +1,27 @@
-# Intégration ChatGPT
+# ChatGPT integration
 
-## Fonctionnement
+## Sequence
 
-L'action principale ouvre ou restaure la fenêtre native ChatGPT, demande une nouvelle conversation, puis invoque son bouton de **dictée** avec Windows UI Automation. Un signal indique quand commencer à parler. La phrase de déclenchement n'est pas incluse dans la question : attendez ce signal avant de poursuivre.
+The primary action opens or restores the native ChatGPT window, requests a new conversation, and invokes its **dictation** button through Windows UI Automation. Wait for the readiness tone before asking the question; the wake phrase is not part of the recorded prompt.
 
-Après trois secondes de silence, VoiceTrigger invoque le bouton de validation de la dictée. ChatGPT effectue sa transcription. VoiceTrigger attend ensuite jusqu'à 30 secondes un bouton d'envoi actif, puis l'invoque une seule fois. La réponse reste dans ChatGPT.
+After speech followed by three seconds of silence, VoiceTrigger confirms dictation. ChatGPT performs transcription. VoiceTrigger waits up to 30 seconds for an enabled Send button and invokes it once. The response remains in ChatGPT.
 
-Le mode vocal conversationnel continu, qui décide lui-même des tours de parole, est différent. VoiceTrigger cible la dictée pour contrôler le délai demandé. OpenAI décrit cette différence dans sa [documentation Voice](https://help.openai.com/en/articles/20001274-gpt-live-faq).
+Continuous conversational Voice controls turn-taking itself. VoiceTrigger targets dictation to implement the requested silence delay. OpenAI describes the distinction in its [Voice documentation](https://help.openai.com/en/articles/20001274-gpt-live-faq).
 
-## Conditions
+## Requirements and limits
 
-- ChatGPT est installé, connecté et dans la vue Chat.
-- Son accès au microphone est déjà autorisé par l'utilisateur.
-- La version installée expose les boutons de nouvelle conversation, dictée, validation et envoi à Windows UI Automation.
-- VoiceTrigger s'exécute au même niveau de privilège que ChatGPT, sans demander les droits administrateur.
+- ChatGPT is installed, signed in, and showing its Chat view.
+- The user has already granted ChatGPT microphone access.
+- The installed version exposes accessible New chat, Dictate, Confirm dictation, Send, and Cancel controls.
+- VoiceTrigger runs at the same privilege level as ChatGPT; administrator access is not requested.
 
-La disponibilité varie selon la version et l'état de l'interface. Aucun contrat public d'automatisation stable n'est supposé. Les recherches sont limitées à une fenêtre du processus `ChatGPT.exe` et aux boutons visibles. Aucun clic par coordonnées, raccourci global ou simulation de touche Entrée n'est utilisé.
+Availability depends on app version and current UI state. No stable public automation contract is assumed. Searches are scoped to visible buttons inside one `ChatGPT.exe` window. The integration does not use coordinate clicks, global shortcuts, or simulated Enter presses.
 
-## Adapter les libellés
+End-to-end ChatGPT dictation and submission have not been verified in this development session because no accessible ChatGPT window was available. Recognition and microphone tests do not establish this integration's success.
 
-Les libellés français et anglais courants sont intégrés. Pour une autre version, arrêtez l'écoute, fermez VoiceTrigger via son menu, puis modifiez ces champs dans `settings.json` :
+## Custom button labels
+
+Common English and French accessibility labels are included as language data. For another app version, stop listening, quit VoiceTrigger, then edit these fields in the existing complete `settings.json`:
 
 ```json
 {
@@ -30,10 +32,10 @@ Les libellés français et anglais courants sont intégrés. Pour une autre vers
 }
 ```
 
-Un champ vide active les libellés intégrés. Un champ renseigné impose une correspondance exacte avec le nom accessible du bouton, sans distinction de casse. Ces champs s'ajoutent au fichier complet existant ; cet extrait n'est pas une configuration de remplacement. Le bouton de validation ne doit jamais désigner le bouton qui annule l'enregistrement.
+Empty fields use built-in labels. A nonempty field requires an exact case-insensitive accessible name. This fragment is not a replacement configuration. Never map the confirmation field to the control that discards recording.
 
-Le diagnostic signale la présence des contrôles connus sans lire ni enregistrer le contenu des conversations. La validation et l'annulation peuvent être absentes avant le début d'une dictée ; le bouton d'envoi peut être désactivé quand le champ est vide. Un résultat positif ne prouve pas un envoi vocal de bout en bout.
+**Diagnostics** reports known controls without starting recording or retaining conversation content. Confirmation and cancellation may be absent before recording starts, and Send may be disabled while the composer is empty. Diagnostic availability alone does not prove an end-to-end submission.
 
-## En cas d'échec
+## Failure recovery
 
-Un bouton manquant ou ambigu produit une erreur visible et arrête l'écoute. Le programme n'essaie pas d'envoyer dans une autre fenêtre. Si l'enregistrement reste ouvert, terminez-le ou annulez-le manuellement. Si la transcription a abouti mais que l'envoi est introuvable, vérifiez le brouillon et envoyez-le vous-même.
+Missing or ambiguous controls produce a visible error and stop listening. The integration does not try a different window to send the message. If recording remains open, finish or cancel it manually. If transcription succeeded but Send is unavailable, review the draft and send it yourself.

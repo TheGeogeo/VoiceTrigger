@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod journal;
 #[cfg(windows)]
 mod platform;
 mod silence;
@@ -16,5 +17,5 @@ fn main() {
         std::process::exit(1);
     }
     #[cfg(not(windows))]
-    eprintln!("VoiceTrigger nécessite Windows 10 ou Windows 11.");
+    eprintln!("VoiceTrigger requires Windows 10 or Windows 11.");
 }

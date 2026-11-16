@@ -1,38 +1,39 @@
-# VoiceTrigger — contexte local pour les IA
+# VoiceTrigger — AI contributor guidance
 
-Ce fichier est versionné et doit être mis à jour avec les décisions du propriétaire. `tracking/`, les configurations personnelles et les dossiers de travail des IA restent locaux et exclus de Git.
+This file is versioned and must reflect the owner's project decisions. Local `tracking/`, personal settings, and AI working directories remain excluded from Git.
 
-## Objectif utilisateur
+## Product goal
 
-Application Windows en Rust, économe en arrière-plan, qui écoute une phrase personnalisée (par défaut « Dit ChatGPT ») pour lancer une action. L'action principale ouvre une nouvelle conversation ChatGPT, démarre sa dictée puis envoie après trois secondes de silence si les contrôles accessibles de l'application le permettent.
+Build an economical Windows background application in Rust. A user-defined spoken phrase, defaulting to “Dit ChatGPT”, runs a configured action. The primary action starts a new ChatGPT conversation, opens dictation, and submits after three seconds of silence when the app exposes the necessary controls.
 
-## Consignes
+## Required rules
 
-- Conserver la licence MIT et le dépôt `https://github.com/TheGeogeo/VoiceTrigger`.
-- Lire les instructions globales de l'utilisateur et les skills obligatoires avant les changements.
-- Reprendre depuis `tracking/voice-trigger/TRACKING.md` ; ne pas confondre compilation et validation vocale réelle.
-- Pour ce projet, le propriétaire autorise les commits, les push des branches et la fusion des fonctionnalités validées dans `main`. Appliquer le cycle Git ci-dessous sans redemander cette autorisation à chaque avancée.
-- Ne jamais conserver d'enregistrement, transcription, secret, jeton ou chemin personnel dans les fichiers destinés au Git.
-- Garder les déclencheurs locaux via SAPI ; pas de rendu ou capture audio supplémentaire continus au repos.
-- Garder UI Automation limitée à ChatGPT ; ne pas introduire de clics par coordonnées ou de raccourcis globaux.
-- Documenter les informations normales et importantes du projet dans `doc/`.
-- Vérifier les protections `.gitignore` avant de préparer une publication.
-- Après Computer Use, fermer la session de capture pour libérer le contour jaune ; ne pas laisser une capture active après les vérifications.
+- Keep the MIT license and repository `https://github.com/TheGeogeo/VoiceTrigger`.
+- Read the owner's applicable instructions and mandatory installed skills before making changes.
+- If local tracking exists, resume from `tracking/voice-trigger/TRACKING.md`. On a fresh clone, inspect the documentation and source, then create the local tracking required for the work. Do not treat compilation as proof of spoken recognition or successful ChatGPT submission.
+- Write all source code, identifiers, comments, documentation, error messages, and application interface text in English. User-defined speech phrases and localized accessibility selectors are language data and retain their configured language.
+- The owner authorizes feature branches, incremental commits and pushes, and merging verified milestones into `main` for this project. Follow the Git workflow below without requesting the same authorization again at each milestone.
+- Keep recordings, transcripts, secrets, tokens, and personal machine paths out of versioned files. The requested live debug journal is bounded, memory-only, and never transmitted.
+- Keep wake-trigger recognition local through SAPI. Do not add continuous rendering or a second permanent waveform capture at idle.
+- Keep UI Automation scoped to ChatGPT. Do not introduce coordinate-based app integration or global keyboard shortcuts.
+- Update the relevant documentation in `doc/` as implementation advances.
+- Check `.gitignore` and the actual staged files before publication. `ForAi.md` is intentionally versioned; other excluded local AI files must remain excluded.
+- End Computer Use capture sessions after UI verification so the capture indicator is released.
 
-## Cycle Git obligatoire
+## Required Git workflow
 
-1. Actualiser les références distantes et partir d'une branche `main` à jour. Créer une branche dédiée par fonctionnalité ou correction, par exemple `feature/live-debug`, `fix/speech-input` ou `docs/usage`.
-2. Faire des commits ciblés à chaque avancée cohérente et vérifiée. Utiliser un message explicite (`feat:`, `fix:`, `docs:`, `test:`). Ne pas attendre la fin du projet pour sauvegarder les avancées dans Git.
-3. Compléter `README.md` et les fichiers pertinents dans `doc/` pendant l'implémentation. Les changements de comportement, réglages, commandes, limites et résultats de validation doivent être documentés dans le même lot que la fonctionnalité.
-4. Relire le diff et les fichiers réellement indexés. Versionner `ForAi.md` en conservant des consignes génériques sans données sensibles. Garder `tracking/`, les dossiers d'IA, les configurations locales et les enregistrements hors du dépôt. Ne jamais utiliser `git add -f` pour contourner ces exclusions.
-5. Exécuter les vérifications adaptées avant de fusionner. Un test de compilation ne prouve pas la détection vocale ni l'intégration ChatGPT ; annoncer les limites réelles. Une régression connue qui empêche la fonctionnalité doit être corrigée avant fusion.
-6. Pousser régulièrement la branche de travail quand un jalon utile est prêt. Fusionner dans `main` chaque palier fonctionnel validé, sans attendre que toutes les idées du projet soient terminées. Conserver un commit de fusion (`--no-ff`) pour identifier le lot livré.
-7. Récupérer les dernières modifications de `main` avant la fusion. Résoudre les conflits sans écraser le travail d'autrui, puis revérifier le résultat si le code change. Respecter les protections GitHub et passer par une PR si elles l'exigent.
-8. Pousser `main` après la fusion et vérifier que le commit local correspond au commit distant. Rapporter la branche, les commits, les vérifications, la fusion et le push réellement effectués.
+1. Fetch the latest remote references and start each feature, fix, or documentation change on a dedicated branch from an up-to-date `main`, such as `feature/live-debug`, `fix/speech-input`, or `docs/usage`.
+2. Make focused commits at coherent, verified milestones. Use descriptive messages with prefixes such as `feat:`, `fix:`, `docs:`, and `test:`. Do not wait until the entire project is complete to preserve meaningful progress.
+3. Update `README.md`, this file when project rules change, and the relevant `doc/` pages alongside changes to behavior, settings, commands, limitations, or validation.
+4. Review the diff and staged file list. Version this guidance without sensitive data. Keep local tracking, AI working directories, personal settings, and recordings out of the index. Never use `git add -f` to bypass those exclusions.
+5. Run checks appropriate to the change before merging. Distinguish compilation, synthetic recognition, real audio reception, actual spoken accuracy, and end-to-end ChatGPT interaction. Fix known regressions that prevent the feature from working before merging it.
+6. Push the working branch at useful milestones. Merge each verified functional increment into `main`, preserving a merge commit with `--no-ff`; do not wait for every future project idea to be complete.
+7. Fetch `main` again before the merge, preserve other contributors' work, resolve conflicts carefully, and recheck the result when code changes. Respect branch protection and use a pull request when required.
+8. Push the resulting `main` and verify its local commit matches the remote commit. Report the branch, commits, checks, merge, and push actually completed.
 
-Ne pas forcer un push, réécrire un historique déjà publié, supprimer des branches ou modifier les protections sans instruction distincte. Conserver la licence MIT. Les règles générales du projet sont décrites dans `doc/developpement.md` ; `ForAi.md` est également publié dans le dépôt.
+Force pushes, rewriting published history, deleting branches, and changing repository protections require separate instructions. The public workflow is also documented in `doc/development.md`.
 
-## Vérification
+## Verification
 
 ```powershell
 cargo fmt --check
@@ -41,4 +42,4 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo build --release --locked
 ```
 
-Les limites et preuves réelles appartiennent au suivi local. Les docs publiques doivent décrire le comportement et les limites sans copier de données de cette machine.
+Run ignored hardware tests explicitly when the target environment supports them. Keep detailed machine-specific evidence in local tracking and publish only accurate, generic validation information.

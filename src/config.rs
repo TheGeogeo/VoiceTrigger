@@ -12,10 +12,10 @@ pub enum Action {
 impl Action {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::ChatGptDictation => "Dicter à ChatGPT",
-            Self::OpenChatGpt => "Ouvrir ChatGPT",
-            Self::OpenUrl(_) => "Ouvrir un site",
-            Self::Launch(_) => "Lancer une application",
+            Self::ChatGptDictation => "Dictate to ChatGPT",
+            Self::OpenChatGpt => "Open ChatGPT",
+            Self::OpenUrl(_) => "Open a website",
+            Self::Launch(_) => "Launch an application",
         }
     }
 
@@ -75,10 +75,10 @@ pub fn normalize(phrase: &str) -> String {
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.triggers.is_empty() || self.triggers.len() > 32 {
-            return Err("Ajoutez entre 1 et 32 déclencheurs.".into());
+            return Err("Add between 1 and 32 triggers.".into());
         }
         if !self.voice_threshold.is_finite() || !(0.001..=0.5).contains(&self.voice_threshold) {
-            return Err("Le seuil du microphone doit être compris entre 0,001 et 0,5.".into());
+            return Err("The microphone threshold must be between 0.001 and 0.5.".into());
         }
         let mut phrases = std::collections::HashSet::new();
         for trigger in &self.triggers {
@@ -87,10 +87,12 @@ impl Settings {
                 || phrase.len() > 160
                 || trigger.phrase.chars().any(char::is_control)
             {
-                return Err("Chaque phrase doit contenir entre 1 et 160 octets, sans caractère de contrôle.".into());
+                return Err(
+                    "Each phrase must contain 1 to 160 bytes, with no control characters.".into(),
+                );
             }
             if !phrases.insert(phrase) {
-                return Err("Deux déclencheurs utilisent la même phrase.".into());
+                return Err("Two triggers use the same phrase.".into());
             }
             match &trigger.action {
                 Action::OpenUrl(url) => {
@@ -101,15 +103,13 @@ impl Settings {
                             .split_once("://")
                             .map_or(true, |(_, host)| host.is_empty() || host.starts_with('/'))
                     {
-                        return Err("Le site doit être une adresse HTTP ou HTTPS complète.".into());
+                        return Err("Enter a complete HTTP or HTTPS address.".into());
                     }
                 }
                 Action::Launch(path)
                     if !Path::new(path).is_file() || !path.to_lowercase().ends_with(".exe") =>
                 {
-                    return Err(
-                        "Choisissez le chemin d'un fichier .exe existant, sans arguments.".into(),
-                    );
+                    return Err("Choose an existing .exe file without arguments.".into());
                 }
                 _ => {}
             }
@@ -118,7 +118,7 @@ impl Settings {
             && (!Path::new(&self.chatgpt_path).is_file()
                 || !self.chatgpt_path.to_lowercase().ends_with(".exe"))
         {
-            return Err("Le chemin ChatGPT doit désigner un fichier .exe existant.".into());
+            return Err("The ChatGPT path must point to an existing .exe file.".into());
         }
         Ok(())
     }
@@ -129,10 +129,10 @@ impl Settings {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default())
             }
-            Err(error) => return Err(format!("Lecture de {} : {error}", path.display())),
+            Err(error) => return Err(format!("Reading {}: {error}", path.display())),
         };
         let settings: Self = serde_json::from_str(&content)
-            .map_err(|error| format!("Configuration JSON invalide : {error}"))?;
+            .map_err(|error| format!("Invalid JSON configuration: {error}"))?;
         settings.validate()?;
         Ok(settings)
     }
@@ -197,7 +197,7 @@ mod tests {
             phrase: "  DIT   CHATGPT ".into(),
             action: Action::OpenChatGpt,
         });
-        assert!(settings.validate().unwrap_err().contains("même phrase"));
+        assert!(settings.validate().unwrap_err().contains("same phrase"));
     }
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
             std::env::temp_dir().join(format!("voice-trigger-test-{}.json", std::process::id()));
         let mut settings = Settings::default();
         settings.save(&path).unwrap();
-        settings.triggers[0].phrase = "bonjour ordinateur".into();
+        settings.triggers[0].phrase = "hello computer".into();
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
         std::fs::remove_file(path).unwrap();
@@ -228,7 +228,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("voice-trigger-invalid-{}.json", std::process::id()));
         std::fs::write(&path, "{invalid").unwrap();
-        assert!(Settings::load(&path).unwrap_err().contains("JSON invalide"));
+        assert!(Settings::load(&path).unwrap_err().contains("Invalid JSON"));
         std::fs::remove_file(path).unwrap();
     }
 }

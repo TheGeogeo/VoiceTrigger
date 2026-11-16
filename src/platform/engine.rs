@@ -1,4 +1,9 @@
-use super::{audio::Microphone, chatgpt, speech::Listener, Com, Result};
+use super::{
+    audio::Microphone,
+    chatgpt,
+    speech::{Listener, SpeechEvent},
+    Com, Result,
+};
 use crate::config::{Action, Settings};
 use crate::silence::{Outcome, SilenceDetector};
 use std::sync::{
@@ -13,6 +18,8 @@ pub enum Event {
     Status(String),
     Stopped,
     DiagnosticDone,
+    Trace(String),
+    AudioLevel(u8),
 }
 
 #[derive(Clone)]
@@ -38,27 +45,35 @@ impl Events {
 
 pub struct Worker {
     stop: Arc<AtomicBool>,
+    debug: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Worker {
-    pub fn start(settings: Settings, events: Events) -> Self {
+    pub fn start(settings: Settings, events: Events, debug_enabled: bool) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let debug = Arc::new(AtomicBool::new(debug_enabled));
         let cancellation = stop.clone();
+        let diagnostics = debug.clone();
         let thread = thread::spawn(move || {
-            if let Err(error) = listen(&settings, &cancellation, &events) {
-                let _ = events.send(Event::Status(format!("Erreur : {error}")));
+            if let Err(error) = listen(&settings, &cancellation, &diagnostics, &events) {
+                let _ = events.send(Event::Status(format!("Error: {error}")));
             }
             let _ = events.send(Event::Stopped);
         });
         Self {
             stop,
+            debug,
             thread: Some(thread),
         }
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn set_debug(&self, enabled: bool) {
+        self.debug.store(enabled, Ordering::Relaxed);
     }
 
     pub fn is_finished(&self) -> bool {
@@ -95,27 +110,80 @@ fn pause(stop: &AtomicBool, duration: Duration) -> bool {
     !stop.load(Ordering::Relaxed)
 }
 
-fn listen(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()> {
+fn listen(
+    settings: &Settings,
+    stop: &AtomicBool,
+    debug: &AtomicBool,
+    events: &Events,
+) -> Result<()> {
     settings.validate()?;
     let _com = Com::new()?;
     let mut listener = Some(Listener::new(settings)?);
+    let _ = events.send(Event::Trace(format!(
+        "Input: {}",
+        listener.as_ref().unwrap().input_name()?
+    )));
+    let _ = events.send(Event::Trace(format!(
+        "Watching {} configured trigger(s).",
+        settings.triggers.len()
+    )));
+    for trigger in &settings.triggers {
+        let _ = events.send(Event::Trace(format!(
+            "Armed trigger: '{}' -> {}",
+            trigger.phrase,
+            trigger.action.label()
+        )));
+    }
+    let mut last_level = Instant::now() - Duration::from_secs(1);
     status(
         events,
-        "Écoute active. Vous pouvez réduire VoiceTrigger dans la zone de notification.",
+        "Listening. Say your trigger phrase. You can hide VoiceTrigger in the notification area.",
     );
     while !stop.load(Ordering::Relaxed) {
-        let Some(index) = listener.as_ref().unwrap().poll()? else {
+        let active_debug = debug.load(Ordering::Relaxed);
+        listener.as_mut().unwrap().set_debug(active_debug)?;
+        let mut matched = None;
+        let mut level = None;
+        for event in listener.as_ref().unwrap().poll()? {
+            match event {
+                SpeechEvent::Recognized {
+                    index,
+                    text,
+                    confidence,
+                } => {
+                    let _ = events.send(Event::Trace(format!(
+                        "Recognized: {text} (confidence {confidence})."
+                    )));
+                    matched.get_or_insert(index);
+                }
+                SpeechEvent::Trace(message) => {
+                    let _ = events.send(Event::Trace(message));
+                }
+                SpeechEvent::AudioLevel(value) => level = Some(value),
+            }
+        }
+        if active_debug && last_level.elapsed() >= Duration::from_millis(200) {
+            if let Some(value) = level {
+                let _ = events.send(Event::AudioLevel(value));
+                last_level = Instant::now();
+            }
+        }
+        let Some(index) = matched else {
             continue;
         };
         let trigger = settings
             .triggers
             .get(index)
-            .ok_or("Identifiant de déclencheur inconnu")?;
-        status(events, format!("Détecté : « {} »", trigger.phrase));
+            .ok_or("Unknown trigger identifier")?;
+        status(events, format!("Trigger detected: '{}'", trigger.phrase));
+        let _ = events.send(Event::Trace(format!(
+            "Running action: {}",
+            trigger.action.label()
+        )));
         // Release the recognition microphone before ChatGPT opens its own recording.
         drop(listener.take());
         let result = match &trigger.action {
-            Action::ChatGptDictation => dictate(settings, stop, events),
+            Action::ChatGptDictation => dictate(settings, stop, debug, events),
             Action::OpenChatGpt => chatgpt::open(settings),
             Action::OpenUrl(url) => chatgpt::open_url(url),
             Action::Launch(path) => std::process::Command::new(path)
@@ -124,7 +192,7 @@ fn listen(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()>
                 .map_err(|e| e.to_string()),
         };
         match result {
-            Ok(()) => status(events, "Action terminée. Réactivation de l'écoute…"),
+            Ok(()) => status(events, "Action completed. Resuming trigger listening..."),
             Err(error) => {
                 // Fail closed: do not trigger again while ChatGPT might still be recording.
                 return Err(error);
@@ -134,13 +202,18 @@ fn listen(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()>
             break;
         }
         listener = Some(Listener::new(settings)?);
-        status(events, "Écoute active — en attente d'un déclencheur.");
+        status(events, "Listening for a configured trigger phrase.");
     }
-    status(events, "Écoute arrêtée.");
+    status(events, "Listening stopped.");
     Ok(())
 }
 
-fn dictate(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()> {
+fn dictate(
+    settings: &Settings,
+    stop: &AtomicBool,
+    debug: &AtomicBool,
+    events: &Events,
+) -> Result<()> {
     chatgpt::open(settings)?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let chat = loop {
@@ -166,17 +239,17 @@ fn dictate(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()
             break;
         }
         if Instant::now() >= deadline {
-            return Err("Bouton de dictée introuvable. Ouvrez une conversation ChatGPT, vérifiez les libellés avec Diagnostic, puis réessayez.".into());
+            return Err("Dictation button not found. Open a ChatGPT chat, check the accessible labels with Diagnostics, and try again.".into());
         }
         pause(stop, Duration::from_millis(250));
     }
-    let result = record(&mut microphone, settings, stop, events);
+    let result = record(&mut microphone, settings, stop, debug, events);
     drop(microphone);
     match result {
         Ok(true) => {}
         Ok(false) => {
             chat.cancel(settings)?;
-            status(events, "Dictée annulée sans envoi.");
+            status(events, "Dictation cancelled without sending.");
             return Ok(());
         }
         Err(error) => {
@@ -190,7 +263,10 @@ fn dictate(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()
         chat.cancel(settings)?;
         return Ok(());
     }
-    status(events, "3 secondes de silence. Transcription ChatGPT…");
+    status(
+        events,
+        "3 seconds of silence. Waiting for ChatGPT transcription...",
+    );
     chat.finish(settings)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -199,11 +275,11 @@ fn dictate(settings: &Settings, stop: &AtomicBool, events: &Events) -> Result<()
             return Ok(());
         }
         if chat.send(settings)? {
-            status(events, "Message envoyé à ChatGPT.");
+            status(events, "Message sent to ChatGPT.");
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err("Envoi indisponible après 30 s. Le texte reste dans ChatGPT ; vérifiez la transcription et envoyez manuellement.".into());
+            return Err("Send is unavailable after 30 seconds. Check the draft in ChatGPT and send it manually.".into());
         }
         pause(stop, Duration::from_millis(250));
     }
@@ -213,6 +289,7 @@ fn record(
     microphone: &mut Microphone,
     settings: &Settings,
     stop: &AtomicBool,
+    debug: &AtomicBool,
     events: &Events,
 ) -> Result<bool> {
     // Keep the readiness tone out of the level detector.
@@ -222,12 +299,13 @@ fn record(
     microphone.start()?;
     status(
         events,
-        "Parlez maintenant. Envoi après 3 secondes de silence. Arrêter annule la dictée.",
+        "Speak now. The message will be sent after 3 seconds of silence. Stop cancels dictation.",
     );
     let mut detector = SilenceDetector::new();
     let mut captured = Duration::ZERO;
     let start = Instant::now();
     let mut last_buffer = Instant::now();
+    let mut last_level = Instant::now() - Duration::from_secs(1);
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(false);
@@ -236,10 +314,16 @@ fn record(
             return Ok(false);
         }
         if last_buffer.elapsed() > Duration::from_secs(2) {
-            return Err("Le microphone ne fournit plus de données. Dictée interrompue.".into());
+            return Err("The microphone stopped delivering audio. Dictation interrupted.".into());
         }
         while let Some((level, chunk)) = microphone.next_level()? {
             last_buffer = Instant::now();
+            if debug.load(Ordering::Relaxed) && last_level.elapsed() >= Duration::from_millis(200) {
+                let _ = events.send(Event::AudioLevel(
+                    (level * 100.0).round().clamp(0.0, 100.0) as u8
+                ));
+                last_level = Instant::now();
+            }
             captured += chunk;
             match detector.update(captured, chunk, level >= settings.voice_threshold) {
                 Outcome::Submit => return Ok(true),

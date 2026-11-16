@@ -1,31 +1,34 @@
-# Architecture et consommation
+# Architecture and resource use
 
-## Composants Rust
+## Rust components
 
-- `src/config.rs` : déclencheurs, validation et sauvegarde JSON atomique.
-- `src/silence.rs` : état de détection du silence, indépendant des API Windows.
-- `src/platform/ui.rs` : fenêtre Win32, contrôles natifs et icône de notification.
-- `src/platform/speech.rs` : reconnaissance SAPI avec une grammaire limitée aux déclencheurs.
-- `src/platform/audio.rs` : capture WinMM temporaire et calcul RMS.
-- `src/platform/chatgpt.rs` : recherche de la fenêtre ChatGPT et invocation des boutons accessibles.
-- `src/platform/engine.rs` : écoute et séquence de dictée sur un thread séparé.
+- `src/config.rs`: trigger definitions, validation, and atomic JSON persistence.
+- `src/silence.rs`: the platform-independent silence state machine.
+- `src/journal.rs`: bounded in-memory debug history, without disk writes.
+- `src/platform/ui.rs`: native Win32 controls and notification icon.
+- `src/platform/speech.rs`: local SAPI recognition restricted to configured phrases.
+- `src/platform/audio.rs`: temporary WinMM capture and RMS calculation.
+- `src/platform/chatgpt.rs`: scoped ChatGPT window discovery and accessible control invocation.
+- `src/platform/engine.rs`: background listening and dictation sequencing.
 
-## Attente en arrière-plan
+## Background operation
 
-L'interface dort dans la boucle de messages Windows. Aucun navigateur embarqué, rendu continu, minuteur graphique ou appel réseau périodique n'est ajouté. Le thread SAPI attend un événement natif par tranches de 100 ms pour pouvoir réagir à l'arrêt. La capture WinMM et les recherches UI Automation sont actives uniquement pendant une action ou un diagnostic.
+The interface sleeps in the Windows message loop. No embedded browser, continuous renderer, GUI timer, or periodic network request is added. The SAPI worker waits on a native event in 100 ms intervals so it can respond to cancellation. WinMM capture and UI Automation searches run only during an action or diagnostic.
 
-Le moteur SAPI lui-même consomme des ressources pour reconnaître la phrase. Le projet ne promet ni consommation nulle ni mesure universelle ; la charge dépend du moteur Windows, du microphone et du matériel. Mesurez la version release sur la machine cible.
+With the window visible, **Live debug** displays SAPI audio and speech events with at most five level updates per second. Hiding the window removes frequent events while keeping trigger recognition active. No additional permanent audio stream is opened. See [live debugging](debug.md).
 
-## Cycle de dictée
+SAPI itself uses resources to recognize speech. There is no promise of zero usage or a universal footprint; load depends on the Windows engine, microphone, and hardware. Measure the release build on the target machine.
 
-1. SAPI détecte une règle et libère son microphone.
-2. ChatGPT ouvre une nouvelle conversation et démarre sa dictée.
-3. WinMM mesure le microphone par buffers de 50 ms, sans écrire d'audio sur disque.
-4. Après de la voix puis trois secondes de silence, la dictée est validée et l'envoi invoqué.
-5. Une pause de deux secondes précède la réactivation de SAPI.
+## Dictation lifecycle
 
-Les interfaces COM restent dans leur thread. Les commandes d'arrêt utilisent un indicateur atomique. Les statuts remontent à la fenêtre par canal Rust et message Win32, sans boucle de rafraîchissement. Une erreur d'intégration arrête l'écoute. Les buffers audio sont réinitialisés et libérés à la fin de la dictée.
+1. SAPI accepts a trigger and releases its microphone.
+2. ChatGPT opens a new conversation and starts dictation.
+3. WinMM measures 50 ms microphone buffers without writing audio to disk.
+4. Speech followed by three seconds of silence confirms dictation and then invokes Send.
+5. A two-second cooldown precedes SAPI reactivation.
 
-## Vérification
+COM interfaces stay on their owning thread. Stop requests use atomics. Status and debug events reach the UI through a Rust channel and Win32 messages. Integration errors stop listening. Audio buffers are reset and released when recording ends.
 
-Les tests couvrent les configurations invalides, les doublons, le remplacement de la sauvegarde et les frontières temporelles du silence. La compilation ne prouve pas la reconnaissance réelle ni la compatibilité d'une version de ChatGPT. Complétez par un test oral et un contrôle de la transcription sur chaque environnement cible.
+## Verification boundaries
+
+Tests cover invalid settings, duplicate phrases, persistence replacement, silence boundaries, bounded debug history, real microphone buffers, actual SAPI input attachment, live audio events, and synthetic phrase dispatch. Compilation or emulation alone does not prove spoken accuracy or compatibility with a particular ChatGPT version. Complete an oral test and review transcription on the target environment.

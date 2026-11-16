@@ -40,17 +40,17 @@ pub fn run() -> Result<()> {
             "--config" => {
                 path = arguments
                     .next()
-                    .ok_or("Chemin manquant après --config")?
+                    .ok_or("Missing path after --config")?
                     .into()
             }
-            _ => return Err(format!("Option inconnue : {argument}")),
+            _ => return Err(format!("Unknown option: {argument}")),
         }
     }
     let settings = crate::config::Settings::load(&path)?;
     if diagnostic {
         let _com = Com::new()?;
         let report = format!(
-            "Configuration : {}\n\n{}\n\n{}",
+            "Configuration: {}\n\n{}\n\n{}",
             path.display(),
             speech::diagnostic()?,
             chatgpt::diagnostic(&settings)?
@@ -61,7 +61,7 @@ pub fn run() -> Result<()> {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&report_path, &report).map_err(|e| e.to_string())?;
-        println!("{report}\nRapport : {}", report_path.display());
+        println!("{report}\nReport: {}", report_path.display());
         Ok(())
     } else {
         ui::run(settings, path)

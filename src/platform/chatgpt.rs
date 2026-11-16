@@ -10,6 +10,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+// Localized accessibility labels are language data, not application messages.
 const NEW_CHAT: &[&str] = &[
     "New chat",
     "Nouveau chat",
@@ -102,8 +103,8 @@ fn window() -> Result<HWND> {
     }
     match windows.as_slice() {
         [window] => Ok(*window),
-        [] => Err("Aucune fenêtre ChatGPT. Ouvrez l'application ou indiquez son chemin .exe dans les réglages.".into()),
-        _ => Err("Plusieurs fenêtres ChatGPT : placez celle à utiliser au premier plan puis réessayez.".into()),
+        [] => Err("No ChatGPT window is available. Open the app or enter its .exe path in settings.".into()),
+        _ => Err("Multiple ChatGPT windows are open. Bring the intended window to the foreground and try again.".into()),
     }
 }
 
@@ -158,12 +159,10 @@ pub fn open(settings: &Settings) -> Result<()> {
     } else {
         Some(PathBuf::from(&settings.chatgpt_path))
     };
-    let executable = executable.ok_or(
-        "Ouvrez ChatGPT une première fois ou renseignez son chemin .exe dans les réglages.",
-    )?;
+    let executable = executable.ok_or("Open ChatGPT once or enter its .exe path in settings.")?;
     std::process::Command::new(executable)
         .spawn()
-        .map_err(|e| format!("Ouverture de ChatGPT : {e}"))?;
+        .map_err(|e| format!("Opening ChatGPT: {e}"))?;
     Ok(())
 }
 
@@ -178,7 +177,7 @@ pub fn open_url(url: &str) -> Result<()> {
             SW_SHOWNORMAL,
         );
         if result.0 <= 32 {
-            Err(format!("Impossible d'ouvrir le site (code {}).", result.0))
+            Err(format!("Could not open the website (code {}).", result.0))
         } else {
             Ok(())
         }
@@ -249,8 +248,7 @@ impl ChatGpt {
             {
                 if found.is_some() {
                     return Err(
-                        "Plusieurs boutons correspondent. Précisez le libellé dans settings.json."
-                            .into(),
+                        "Multiple buttons match. Set an exact label in settings.json.".into(),
                     );
                 }
                 found = Some(button);
@@ -266,10 +264,10 @@ impl ChatGpt {
         unsafe {
             let pattern: IUIAutomationInvokePattern = button
                 .GetCurrentPatternAs(UIA_InvokePatternId)
-                .map_err(|e| format!("Bouton {description} non invocable : {e}"))?;
+                .map_err(|e| format!("The {description} button cannot be invoked: {e}"))?;
             pattern
                 .Invoke()
-                .map_err(|e| format!("Bouton {description} : {e}"))?;
+                .map_err(|e| format!("The {description} button: {e}"))?;
         }
         Ok(true)
     }
@@ -279,34 +277,40 @@ impl ChatGpt {
             ShowWindow(self.window, SW_RESTORE);
             SetForegroundWindow(self.window);
         }
-        if self.invoke("", NEW_CHAT, "nouvelle conversation")? {
+        if self.invoke("", NEW_CHAT, "new chat")? {
             Ok(())
         } else {
-            Err("Bouton Nouvelle conversation introuvable. Passez ChatGPT dans la vue Chat et réessayez.".into())
+            Err("New chat button not found. Switch ChatGPT to its Chat view and try again.".into())
         }
     }
 
     pub fn start(&self, settings: &Settings) -> Result<bool> {
-        self.invoke(&settings.microphone_button, MICROPHONE, "dictée")
+        self.invoke(&settings.microphone_button, MICROPHONE, "dictation")
     }
 
     pub fn finish(&self, settings: &Settings) -> Result<()> {
-        if self.invoke(&settings.finish_button, FINISH, "validation de la dictée")? {
+        if self.invoke(&settings.finish_button, FINISH, "dictation confirmation")? {
             Ok(())
         } else {
-            Err("Bouton de validation de la dictée introuvable. Terminez la dictée manuellement dans ChatGPT.".into())
+            Err(
+                "Dictation confirmation button not found. Finish dictation manually in ChatGPT."
+                    .into(),
+            )
         }
     }
 
     pub fn send(&self, settings: &Settings) -> Result<bool> {
-        self.invoke(&settings.send_button, SEND, "envoi")
+        self.invoke(&settings.send_button, SEND, "send")
     }
 
     pub fn cancel(&self, settings: &Settings) -> Result<()> {
-        if self.invoke(&settings.cancel_button, CANCEL, "annulation")? {
+        if self.invoke(&settings.cancel_button, CANCEL, "cancellation")? {
             Ok(())
         } else {
-            Err("Annulation automatique indisponible : arrêtez la dictée manuellement dans ChatGPT.".into())
+            Err(
+                "Automatic cancellation is unavailable. Cancel dictation manually in ChatGPT."
+                    .into(),
+            )
         }
     }
 }
@@ -324,29 +328,28 @@ fn matches_name(name: &str, custom: &str, aliases: &[&str]) -> bool {
 pub fn diagnostic(settings: &Settings) -> Result<String> {
     let chat = match ChatGpt::connect() {
         Ok(chat) => chat,
-        Err(error) => return Ok(format!("ChatGPT : {error}")),
+        Err(error) => return Ok(format!("ChatGPT: {error}")),
     };
-    let mut report = String::from(
-        "ChatGPT : fenêtre détectée. Contrôles disponibles (aucune action exécutée) :",
-    );
+    let mut report =
+        String::from("ChatGPT window found. Available controls (no action performed):");
     for (description, custom, aliases) in [
-        ("Nouvelle conversation", "", NEW_CHAT),
-        ("Dictée", settings.microphone_button.as_str(), MICROPHONE),
+        ("New conversation", "", NEW_CHAT),
+        ("Dictation", settings.microphone_button.as_str(), MICROPHONE),
         (
-            "Validation de la dictée",
+            "Dictation confirmation",
             settings.finish_button.as_str(),
             FINISH,
         ),
-        ("Envoi", settings.send_button.as_str(), SEND),
-        ("Annulation", settings.cancel_button.as_str(), CANCEL),
+        ("Send", settings.send_button.as_str(), SEND),
+        ("Cancellation", settings.cancel_button.as_str(), CANCEL),
     ] {
         let available = chat.find(custom, aliases)?.is_some();
         report.push_str(&format!(
             "\n- {description} : {}",
             if available {
-                "oui"
+                "yes"
             } else {
-                "non (peut dépendre de l'état de la conversation)"
+                "no (may depend on the current conversation state)"
             }
         ));
     }

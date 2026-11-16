@@ -3,12 +3,18 @@ use super::{
     wide, Result,
 };
 use crate::config::{Action, Settings, Trigger};
+use crate::journal::Journal;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::{
+    InitCommonControlsEx, BST_CHECKED, EM_SCROLLCARET, EM_SETSEL, ICC_PROGRESS_CLASS,
+    INITCOMMONCONTROLSEX, PBM_SETPOS, PBM_SETRANGE32,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -35,6 +41,11 @@ const STATUS: u16 = 115;
 const HIDE: u16 = 116;
 const OPEN: u16 = 117;
 const EXIT: u16 = 118;
+const DEBUG: u16 = 119;
+const LEVEL: u16 = 120;
+const LOG: u16 = 121;
+const CLEAR_LOG: u16 = 122;
+const METER: u16 = 123;
 
 struct App {
     window: HWND,
@@ -48,6 +59,8 @@ struct App {
     diagnostic_active: bool,
     tray: bool,
     exit_when_stopped: bool,
+    journal: Journal,
+    started: Instant,
 }
 
 impl App {
@@ -119,8 +132,8 @@ impl App {
             WPARAM(self.heading_font.0 as usize),
             LPARAM(1),
         );
-        self.label("Dites votre phrase. ChatGPT s'ouvre, vous parlez, puis 3 secondes de silence envoient le message.", (24, 58, 820, 40));
-        self.label("Déclencheurs vocaux", (24, 105, 300, 24));
+        self.label("Say your trigger phrase, wait for the tone, then speak. Three seconds of silence submit the message.", (24, 58, 820, 40));
+        self.label("Voice triggers", (24, 96, 300, 24));
         self.control(
             w!("LISTBOX"),
             "",
@@ -129,23 +142,23 @@ impl App {
                 | WS_TABSTOP
                 | WINDOW_STYLE(LBS_NOTIFY as u32 | LBS_NOINTEGRALHEIGHT as u32),
             LIST,
-            (24, 132, 804, 124),
+            (24, 122, 804, 64),
         );
-        self.label("Phrase à prononcer", (24, 270, 350, 22));
-        self.edit("", PHRASE, (24, 296, 394, 28));
-        self.label("Action", (438, 270, 390, 22));
+        self.label("Spoken trigger phrase", (24, 200, 350, 22));
+        self.edit("", PHRASE, (24, 224, 394, 28));
+        self.label("Action", (438, 200, 390, 22));
         self.control(
             w!("COMBOBOX"),
             "",
             WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
             ACTION,
-            (438, 296, 390, 180),
+            (438, 224, 390, 180),
         );
         for action in [
-            "Dicter à ChatGPT",
-            "Ouvrir ChatGPT",
-            "Ouvrir un site",
-            "Lancer une application",
+            "Dictate to ChatGPT",
+            "Open ChatGPT",
+            "Open a website",
+            "Launch an application",
         ] {
             SendMessageW(
                 self.child(ACTION),
@@ -155,23 +168,23 @@ impl App {
             );
         }
         self.label(
-            "Cible (adresse HTTP(S) ou chemin .exe, selon l'action)",
-            (24, 334, 804, 22),
+            "Target (HTTP(S) address or .exe path, depending on the action)",
+            (24, 260, 804, 22),
         );
-        self.edit("", TARGET, (24, 360, 804, 28));
-        self.button("Appliquer à la sélection", APPLY, (24, 402, 212, 32));
-        self.button("Ajouter", ADD, (250, 402, 120, 32));
-        self.button("Supprimer", DELETE, (384, 402, 120, 32));
-        self.button("Enregistrer", SAVE, (680, 402, 148, 32));
-        self.label("Langue de reconnaissance", (24, 452, 380, 22));
+        self.edit("", TARGET, (24, 284, 804, 28));
+        self.button("Apply to selected trigger", APPLY, (24, 326, 212, 32));
+        self.button("Add", ADD, (250, 326, 120, 32));
+        self.button("Remove", DELETE, (384, 326, 120, 32));
+        self.button("Save", SAVE, (680, 326, 148, 32));
+        self.label("Recognition language", (24, 374, 380, 22));
         self.control(
             w!("COMBOBOX"),
             "",
             WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
             LANGUAGE,
-            (24, 478, 394, 140),
+            (24, 398, 394, 140),
         );
-        for language in ["Français (France)", "Anglais (États-Unis)"] {
+        for language in ["French (France)", "English (United States)"] {
             SendMessageW(
                 self.child(LANGUAGE),
                 CB_ADDSTRING,
@@ -189,34 +202,101 @@ impl App {
             }),
             LPARAM(0),
         );
-        self.label("Seuil du silence (0.001 à 0.5)", (438, 452, 390, 22));
+        self.label("Silence threshold (0.001 to 0.5)", (438, 374, 390, 22));
         self.edit(
             &self.settings.voice_threshold.to_string(),
             THRESHOLD,
-            (438, 478, 390, 28),
+            (438, 398, 390, 28),
         );
         self.label(
-            "Chemin ChatGPT.exe (facultatif si ChatGPT est déjà lancé)",
-            (24, 520, 804, 22),
+            "ChatGPT.exe path (optional when ChatGPT is already running)",
+            (24, 440, 804, 22),
         );
-        self.edit(&self.settings.chatgpt_path, CHAT_PATH, (24, 546, 804, 28));
-        self.button("Démarrer l'écoute", START, (24, 592, 190, 36));
-        self.button("Arrêter", STOP, (228, 592, 118, 36));
-        self.button("Diagnostic", DIAGNOSTIC, (360, 592, 140, 36));
-        self.button("Arrière-plan", HIDE, (548, 592, 176, 36));
-        self.button("Quitter", EXIT, (738, 592, 90, 36));
+        self.edit(&self.settings.chatgpt_path, CHAT_PATH, (24, 464, 804, 28));
+        self.button("Start listening", START, (24, 510, 190, 36));
+        self.button("Stop", STOP, (228, 510, 118, 36));
+        self.button("Diagnostics", DIAGNOSTIC, (360, 510, 140, 36));
+        self.button("Hide to tray", HIDE, (548, 510, 176, 36));
+        self.button("Quit", EXIT, (738, 510, 90, 36));
+        self.control(
+            w!("STATIC"),
+            "Ready. Click Start listening, then say your trigger phrase.",
+            WINDOW_STYLE(0),
+            STATUS,
+            (24, 558, 804, 44),
+        );
+        self.control(
+            w!("BUTTON"),
+            "Live debug (visible window only)",
+            WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            DEBUG,
+            (24, 608, 380, 28),
+        );
+        SendMessageW(
+            self.child(DEBUG),
+            BM_SETCHECK,
+            WPARAM(BST_CHECKED.0 as usize),
+            LPARAM(0),
+        );
+        self.button("Clear log", CLEAR_LOG, (704, 608, 124, 28));
+        self.control(
+            w!("STATIC"),
+            "Microphone: stopped",
+            WINDOW_STYLE(0),
+            LEVEL,
+            (24, 640, 540, 24),
+        );
+        self.control(
+            w!("msctls_progress32"),
+            "Microphone level",
+            WINDOW_STYLE(0),
+            METER,
+            (580, 642, 248, 18),
+        );
+        SendMessageW(self.child(METER), PBM_SETRANGE32, WPARAM(0), LPARAM(100));
         self.control(
             w!("EDIT"),
-            "Prêt. Enregistrez vos réglages puis démarrez l'écoute.",
+            "",
             WS_BORDER
                 | WS_VSCROLL
+                | WS_TABSTOP
                 | WINDOW_STYLE(ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32),
-            STATUS,
-            (24, 648, 804, 78),
+            LOG,
+            (24, 670, 804, 105),
         );
-        self.label("Fermer masque la fenêtre. Icône de notification : ouvrir, arrêter ou quitter. Déclencheurs locaux, sans clé API.", (24, 740, 804, 38));
+        self.append_log("Ready. Live debug shows microphone levels, speech events, matches and action errors. No log file is written.");
         self.refresh_list(Some(0));
         self.update_controls(false);
+    }
+
+    unsafe fn append_log(&mut self, text: &str) {
+        self.journal.append(self.started.elapsed(), text);
+        self.set_text(LOG, &self.journal.render());
+        let end = GetWindowTextLengthW(self.child(LOG)) as usize;
+        SendMessageW(
+            self.child(LOG),
+            EM_SETSEL,
+            WPARAM(end),
+            LPARAM(end as isize),
+        );
+        SendMessageW(self.child(LOG), EM_SCROLLCARET, WPARAM(0), LPARAM(0));
+    }
+
+    unsafe fn debug_enabled(&self) -> bool {
+        IsWindowVisible(self.window).as_bool()
+            && SendMessageW(self.child(DEBUG), BM_GETCHECK, WPARAM(0), LPARAM(0)).0
+                == BST_CHECKED.0 as isize
+    }
+
+    unsafe fn update_debug(&self) {
+        let enabled = self.debug_enabled();
+        if let Some(worker) = &self.worker {
+            worker.set_debug(enabled);
+        }
+        if !enabled {
+            self.set_text(LEVEL, "Live debug paused; trigger listening is unchanged.");
+            SendMessageW(self.child(METER), PBM_SETPOS, WPARAM(0), LPARAM(0));
+        }
     }
 
     unsafe fn selected(&self) -> Option<usize> {
@@ -288,7 +368,7 @@ impl App {
             .trim()
             .replace(',', ".")
             .parse()
-            .map_err(|_| "Seuil du silence invalide.")?;
+            .map_err(|_| "Invalid silence threshold.")?;
         settings.chatgpt_path = self.text(CHAT_PATH).trim().trim_matches('"').into();
         settings.validate()?;
         Ok(settings)
@@ -301,7 +381,7 @@ impl App {
             1 => Action::OpenChatGpt,
             2 => Action::OpenUrl(target),
             3 => Action::Launch(target),
-            _ => return Err("Choisissez une action.".into()),
+            _ => return Err("Choose an action.".into()),
         };
         let trigger = Trigger {
             phrase: self.text(PHRASE).trim().into(),
@@ -312,17 +392,14 @@ impl App {
             settings.triggers.push(trigger);
             settings.triggers.len() - 1
         } else {
-            let index = self.selected().ok_or("Sélectionnez un déclencheur.")?;
+            let index = self.selected().ok_or("Select a trigger.")?;
             settings.triggers[index] = trigger;
             index
         };
         settings.validate()?;
         self.settings = settings;
         self.refresh_list(Some(index));
-        self.set_text(
-            STATUS,
-            "Déclencheur modifié. Cliquez sur Enregistrer pour conserver vos changements.",
-        );
+        self.set_text(STATUS, "Trigger updated. Click Save to keep your changes.");
         Ok(())
     }
 
@@ -344,18 +421,22 @@ impl App {
 
     unsafe fn hide(&mut self) -> Result<()> {
         if !self.tray {
-            self.tray = self.notify(NIM_ADD, "VoiceTrigger — ouvrir avec un double-clic");
+            self.tray = self.notify(NIM_ADD, "VoiceTrigger - double-click to open");
         }
         if !self.tray {
-            return Err("Icône de notification indisponible. La fenêtre reste ouverte.".into());
+            return Err(
+                "The notification icon is unavailable. The window will remain visible.".into(),
+            );
         }
         ShowWindow(self.window, SW_HIDE);
+        self.update_debug();
         Ok(())
     }
 
     unsafe fn show(&self) {
         ShowWindow(self.window, SW_RESTORE);
         SetForegroundWindow(self.window);
+        self.update_debug();
     }
 
     unsafe fn command(&mut self, id: u16) -> Result<()> {
@@ -363,32 +444,37 @@ impl App {
             APPLY => self.apply_trigger(false)?,
             ADD => self.apply_trigger(true)?,
             DELETE => {
-                let index = self.selected().ok_or("Sélectionnez un déclencheur.")?;
+                let index = self.selected().ok_or("Select a trigger.")?;
                 if self.settings.triggers.len() == 1 {
-                    return Err("Conservez au moins un déclencheur.".into());
+                    return Err("Keep at least one trigger.".into());
                 }
                 self.settings.triggers.remove(index);
                 self.refresh_list(Some(index.min(self.settings.triggers.len() - 1)));
-                self.set_text(STATUS, "Déclencheur supprimé. Cliquez sur Enregistrer.");
+                self.set_text(STATUS, "Trigger removed. Click Save to keep the change.");
             }
             SAVE | START => {
                 self.apply_trigger(false)?;
                 self.settings = self.read_settings()?;
                 self.settings.save(&self.path)?;
-                self.set_text(STATUS, "Configuration enregistrée.");
+                self.set_text(STATUS, "Settings saved.");
                 if id == START && self.worker.is_none() {
-                    self.worker = Some(Worker::start(self.settings.clone(), self.events.clone()));
+                    self.worker = Some(Worker::start(
+                        self.settings.clone(),
+                        self.events.clone(),
+                        self.debug_enabled(),
+                    ));
                     self.update_controls(true);
-                    self.set_text(STATUS, "Initialisation du moteur vocal Windows…");
+                    self.set_text(STATUS, "Starting the Windows speech recognizer...");
+                    self.set_text(LEVEL, "Waiting for live audio events…");
                     if !self.tray {
-                        self.tray = self.notify(NIM_ADD, "VoiceTrigger — écoute en cours");
+                        self.tray = self.notify(NIM_ADD, "VoiceTrigger - listening");
                     }
                 }
             }
             STOP => {
                 if let Some(worker) = &self.worker {
                     worker.stop();
-                    self.set_text(STATUS, "Arrêt demandé. Annulation de la dictée en cours…");
+                    self.set_text(STATUS, "Stop requested. Cancelling any active dictation...");
                 }
             }
             DIAGNOSTIC if !self.diagnostic_active => {
@@ -412,12 +498,24 @@ impl App {
                 });
             }
             HIDE => self.hide()?,
+            DEBUG => {
+                self.update_debug();
+                self.append_log(if self.debug_enabled() {
+                    "Live debug enabled."
+                } else {
+                    "Live debug disabled. Trigger listening remains active."
+                });
+            }
+            CLEAR_LOG => {
+                self.journal.clear();
+                self.set_text(LOG, "");
+            }
             OPEN => self.show(),
             EXIT => {
                 if let Some(worker) = &self.worker {
                     self.exit_when_stopped = true;
                     worker.stop();
-                    self.set_text(STATUS, "Annulation en cours avant de quitter…");
+                    self.set_text(STATUS, "Cancelling before quitting...");
                 } else {
                     PostMessageW(self.window, QUIT_MESSAGE, WPARAM(0), LPARAM(0));
                 }
@@ -432,14 +530,17 @@ impl App {
             match event {
                 Event::Status(text) => {
                     self.set_text(STATUS, &text);
-                    if text.starts_with("Erreur") {
+                    self.append_log(&text);
+                    if text.starts_with("Error") {
                         self.show();
                     }
                 }
                 Event::Stopped => {
                     self.worker = None;
                     self.update_controls(false);
-                    self.notify(NIM_MODIFY, "VoiceTrigger — écoute arrêtée");
+                    self.set_text(LEVEL, "Microphone: stopped");
+                    SendMessageW(self.child(METER), PBM_SETPOS, WPARAM(0), LPARAM(0));
+                    self.notify(NIM_MODIFY, "VoiceTrigger - listening stopped");
                     if self.exit_when_stopped {
                         PostMessageW(self.window, QUIT_MESSAGE, WPARAM(0), LPARAM(0));
                     }
@@ -447,6 +548,24 @@ impl App {
                 Event::DiagnosticDone => {
                     self.diagnostic_active = false;
                     EnableWindow(self.child(DIAGNOSTIC), true);
+                }
+                Event::Trace(text) => self.append_log(&text),
+                Event::AudioLevel(level) => {
+                    if self.debug_enabled() {
+                        self.set_text(
+                            LEVEL,
+                            &format!(
+                                "Input level: {level}% — receiving audio ({:.1}s)",
+                                self.started.elapsed().as_secs_f32()
+                            ),
+                        );
+                        SendMessageW(
+                            self.child(METER),
+                            PBM_SETPOS,
+                            WPARAM(level as usize),
+                            LPARAM(0),
+                        );
+                    }
                 }
             }
         }
@@ -487,6 +606,7 @@ unsafe extern "system" fn procedure(
             } else if notification == 0 {
                 if let Err(error) = app.command(id) {
                     app.set_text(STATUS, &error);
+                    app.append_log(&error);
                 }
             }
             LRESULT(0)
@@ -520,10 +640,10 @@ unsafe extern "system" fn procedure(
             }
             if lparam.0 as u32 == WM_RBUTTONUP {
                 if let Ok(menu) = CreatePopupMenu() {
-                    AppendMenuW(menu, MF_STRING, OPEN as usize, w!("Ouvrir VoiceTrigger"));
-                    AppendMenuW(menu, MF_STRING, STOP as usize, w!("Arrêter l'écoute"));
+                    AppendMenuW(menu, MF_STRING, OPEN as usize, w!("Open VoiceTrigger"));
+                    AppendMenuW(menu, MF_STRING, STOP as usize, w!("Stop listening"));
                     AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-                    AppendMenuW(menu, MF_STRING, EXIT as usize, w!("Quitter"));
+                    AppendMenuW(menu, MF_STRING, EXIT as usize, w!("Quit"));
                     let mut point = POINT::default();
                     GetCursorPos(&mut point);
                     SetForegroundWindow(window);
@@ -575,6 +695,10 @@ pub fn run(settings: Settings, path: PathBuf) -> Result<()> {
         let already_running = GetLastError() == ERROR_ALREADY_EXISTS;
         let _instance = Instance(handle);
         let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
+        InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_PROGRESS_CLASS,
+        });
         let class = w!("VoiceTriggerWindow");
         if already_running {
             let existing = FindWindowW(class, PCWSTR::null());
@@ -639,16 +763,18 @@ pub fn run(settings: Settings, path: PathBuf) -> Result<()> {
             diagnostic_active: false,
             tray: false,
             exit_when_stopped: false,
+            journal: Journal::default(),
+            started: Instant::now(),
         });
         let window = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class,
-            w!("VoiceTrigger — déclencheurs vocaux"),
+            w!("VoiceTrigger - voice triggers"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             870,
-            830,
+            820,
             None,
             None,
             instance,

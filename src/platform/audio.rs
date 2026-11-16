@@ -29,7 +29,7 @@ fn check(code: u32) -> Result<()> {
     }
     let length = text.iter().position(|c| *c == 0).unwrap_or(text.len());
     Err(format!(
-        "Microphone : {} (code {code}). Vérifiez les autorisations et le périphérique par défaut.",
+        "Microphone: {} (code {code}). Check permissions and the default input device.",
         String::from_utf16_lossy(&text[..length])
     ))
 }

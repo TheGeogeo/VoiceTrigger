@@ -3,7 +3,7 @@ name = "voice-trigger"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.72"
-description = "Déclencheurs vocaux locaux et dictée ChatGPT sous Windows"
+description = "Local voice triggers and ChatGPT dictation for Windows"
 license = "MIT"
 
 [dependencies]
