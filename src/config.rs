@@ -50,7 +50,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             triggers: vec![Trigger {
-                phrase: "Dit ChatGPT".into(),
+                phrase: "Ok GPT".into(),
                 action: Action::ChatGptDictation,
             }],
             language: 0x040c,
@@ -194,7 +194,7 @@ mod tests {
     fn rejects_duplicate_phrases_ignoring_case_and_spaces() {
         let mut settings = Settings::default();
         settings.triggers.push(Trigger {
-            phrase: "  DIT   CHATGPT ".into(),
+            phrase: "  OK   GPT ".into(),
             action: Action::OpenChatGpt,
         });
         assert!(settings.validate().unwrap_err().contains("same phrase"));

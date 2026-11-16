@@ -151,8 +151,9 @@ fn listen(
                     text,
                     confidence,
                 } => {
+                    let confidence_name = if confidence > 0 { "high" } else { "normal" };
                     let _ = events.send(Event::Trace(format!(
-                        "Recognized: {text} (confidence {confidence})."
+                        "Recognized: {text} (confidence: {confidence_name}; SAPI value {confidence})."
                     )));
                     matched.get_or_insert(index);
                 }
@@ -214,7 +215,9 @@ fn dictate(
     debug: &AtomicBool,
     events: &Events,
 ) -> Result<()> {
+    status(events, "Opening or restoring ChatGPT...");
     chatgpt::open(settings)?;
+    status(events, "Waiting for the ChatGPT window...");
     let deadline = Instant::now() + Duration::from_secs(10);
     let chat = loop {
         if stop.load(Ordering::Relaxed) {
@@ -228,7 +231,30 @@ fn dictate(
             }
         }
     };
-    chat.new_chat()?;
+    status(events, "Opening a new ChatGPT conversation...");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if chat.new_chat()? {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "New chat button did not become ready. Select the Chat view in ChatGPT and retry."
+                    .into(),
+            );
+        }
+        pause(stop, Duration::from_millis(200));
+    }
+    // The old composer's Dictate button can remain accessible briefly
+    // while ChatGPT asynchronously navigates to a new conversation.
+    status(events, "Waiting for the new conversation to settle...");
+    if !pause(stop, Duration::from_millis(700)) {
+        return Ok(());
+    }
+    status(events, "Starting ChatGPT dictation...");
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut microphone = Microphone::open()?;
     loop {
@@ -243,6 +269,29 @@ fn dictate(
         }
         pause(stop, Duration::from_millis(250));
     }
+    status(events, "Waiting for ChatGPT recording controls...");
+    let abort_recording = |error: String| match chat.cancel_if_present(settings) {
+        Ok(true) => format!("{error} Dictation was cancelled."),
+        Ok(false) => error,
+        Err(cancel_error) => {
+            format!("{error} {cancel_error} Cancel dictation manually in ChatGPT.")
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !chat.recording_ready(settings).map_err(abort_recording)? {
+        if stop.load(Ordering::Relaxed) {
+            chat.cancel_if_present(settings)?;
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            chat.cancel_if_present(settings)?;
+            return Err("ChatGPT did not enter recording mode. Check its microphone permission and dictation controls, then retry.".into());
+        }
+        pause(stop, Duration::from_millis(100));
+    }
+    let _ = events.send(Event::Trace(
+        "ChatGPT recording confirmed: Stop dictation and Cancel dictation are available.".into(),
+    ));
     let result = record(&mut microphone, settings, stop, debug, events);
     drop(microphone);
     match result {
@@ -267,7 +316,7 @@ fn dictate(
         events,
         "3 seconds of silence. Waiting for ChatGPT transcription...",
     );
-    chat.finish(settings)?;
+    chat.finish(settings).map_err(abort_recording)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         // On cancellation leave the text as a draft; never send it.

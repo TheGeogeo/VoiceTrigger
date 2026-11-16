@@ -22,7 +22,7 @@ SAPI itself uses resources to recognize speech. There is no promise of zero usag
 ## Dictation lifecycle
 
 1. SAPI accepts a trigger and releases its microphone.
-2. ChatGPT opens a new conversation and starts dictation.
+2. ChatGPT's window and New chat control become ready; navigation settles, dictation starts, and recording-stop/cancel controls are verified.
 3. WinMM measures 50 ms microphone buffers without writing audio to disk.
 4. Speech followed by three seconds of silence confirms dictation and then invokes Send.
 5. A two-second cooldown precedes SAPI reactivation.

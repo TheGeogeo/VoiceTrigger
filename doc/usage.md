@@ -10,7 +10,7 @@ The default configuration is `%APPDATA%\VoiceTrigger\settings.json`. The interfa
 
 Select a trigger to edit it. **Apply to selected trigger** updates its row; **Add** creates a new row; **Save** persists the list and settings. Saving also applies the selected row's fields. Stop listening before changing settings.
 
-Keep between 1 and 32 distinct phrases. Matching ignores letter case and repeated spaces. Phrases containing “ChatGPT” also receive the configured French pronunciation variants “chat gé pé té” and “chat g p t”.
+Keep between 1 and 32 distinct phrases. Matching ignores letter case and repeated spaces. The new-configuration default is “Ok GPT”; saved custom phrases are preserved. Phrases containing “ChatGPT” or a standalone “GPT” also receive spelled-out French letter variants, such as “ok gé pé té” and “ok g p t”.
 
 ## Live feedback
 

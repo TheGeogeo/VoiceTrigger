@@ -326,6 +326,16 @@ fn pronunciations(phrase: &str) -> Vec<String> {
     if phrase.contains("chatgpt") {
         phrases.push(phrase.replace("chatgpt", "chat gé pé té"));
         phrases.push(phrase.replace("chatgpt", "chat g p t"));
+    } else if phrase.split_whitespace().any(|word| word == "gpt") {
+        for spoken in ["gé pé té", "g p t"] {
+            phrases.push(
+                phrase
+                    .split_whitespace()
+                    .map(|word| if word == "gpt" { spoken } else { word })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+        }
     }
     phrases
 }
@@ -333,6 +343,15 @@ fn pronunciations(phrase: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expands_standalone_gpt_acronym_without_rewriting_other_words() {
+        assert_eq!(
+            pronunciations("Ok GPT"),
+            vec!["ok gpt", "ok gé pé té", "ok g p t"]
+        );
+        assert_eq!(pronunciations("ok gptool"), vec!["ok gptool"]);
+    }
 
     #[test]
     #[ignore = "Requires the installed French SAPI engine and the real default microphone"]

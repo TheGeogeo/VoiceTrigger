@@ -2,7 +2,7 @@
 
 ## Sequence
 
-The primary action opens or restores the native ChatGPT window, requests a new conversation, and invokes its **dictation** button through Windows UI Automation. Wait for the readiness tone before asking the question; the wake phrase is not part of the recorded prompt.
+The primary action discovers ChatGPT processes and restores or launches its native window. It waits for the window and New chat control, requests a conversation, allows navigation to settle, and invokes **dictation** through Windows UI Automation. Recording is confirmed only when both the recording-stop and recording-cancel controls are available. Wait for the readiness tone before asking the question; the wake phrase is not part of the recorded prompt.
 
 After speech followed by three seconds of silence, VoiceTrigger confirms dictation. ChatGPT performs transcription. VoiceTrigger waits up to 30 seconds for an enabled Send button and invokes it once. The response remains in ChatGPT.
 
@@ -17,7 +17,13 @@ Continuous conversational Voice controls turn-taking itself. VoiceTrigger target
 
 Availability depends on app version and current UI state. No stable public automation contract is assumed. Searches are scoped to visible buttons inside one `ChatGPT.exe` window. The integration does not use coordinate clicks, global shortcuts, or simulated Enter presses.
 
-End-to-end ChatGPT dictation and submission have not been verified in this development session because no accessible ChatGPT window was available. Recognition and microphone tests do not establish this integration's success.
+The installed app has passed native startup/cancellation and simultaneous microphone-monitor tests. Full question transcription and actual message submission have not been exercised. Tests deliberately avoid inspecting existing user drafts or sending a message.
+
+## Recording controls and readiness
+
+In the tested French app, `Arrêter la dictée` stops recording for transcription; `Annuler la dictée` discards it. They must not be mapped to the same action. Specific dictation labels take priority over generic aliases, and duplicate controls with the same preferred label produce an explicit error rather than an arbitrary click.
+
+The action waits up to 10 seconds for a window, 20 seconds for New chat, a 700 ms navigation settling period, 10 seconds for Dictate, and up to 5 seconds for recording controls after invoking it. The readiness tone and silence monitor start only after recording is confirmed. Cancellation or errors abort the recording when its cancel control remains available.
 
 ## Custom button labels
 
@@ -35,6 +41,16 @@ Common English and French accessibility labels are included as language data. Fo
 Empty fields use built-in labels. A nonempty field requires an exact case-insensitive accessible name. This fragment is not a replacement configuration. Never map the confirmation field to the control that discards recording.
 
 **Diagnostics** reports known controls without starting recording or retaining conversation content. Confirmation and cancellation may be absent before recording starts, and Send may be disabled while the composer is empty. Diagnostic availability alone does not prove an end-to-end submission.
+
+Window diagnostics include process and window counts, hidden/restorable main windows, and unavailable process-path queries. Process IDs from a process snapshot allow discovery without depending on privileged executable-path queries. Ambiguous visible windows still require the user to select the intended one.
+
+To run the native recording check explicitly:
+
+```powershell
+cargo test --locked native_dictation_starts_and_can_be_cancelled -- --ignored --test-threads=1
+```
+
+This opens a conversation, checks recording controls and the concurrent silence monitor, and then cancels. It never invokes Send.
 
 ## Failure recovery
 

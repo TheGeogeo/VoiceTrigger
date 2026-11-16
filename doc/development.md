@@ -37,6 +37,8 @@ Before committing or pushing, inspect staged files and [privacy exclusions](priv
 
 ## Merge and publication
 
-Fetch the latest `main`, integrate changes into the feature branch if needed, and verify the result. Merge each ready increment with `git merge --no-ff` to preserve its grouping. Respect branch protection and use a pull request when required.
+Fetch the latest `main`, integrate changes into the feature branch if needed, and verify the result. Keep incremental commits on the working branch. Once the increment is ready, use `git merge --squash` and commit its combined changes, or use GitHub's squash-merge option. Respect branch protection and use a pull request when required. Do not rewrite previously published main history to retrofit this policy.
+
+The squash commit message must be detailed: describe the original failure or need, the implemented behavior, meaningful design choices, affected components, checks actually executed, and remaining limitations. Explain concrete triggers and outcomes when they help a reviewer. Keep private data, secrets, and unrelated work out of the message.
 
 Push `main` after merging and compare local and remote commit identifiers. Delivery reports must identify actual commits, checks, and remaining limits. Force pushes, rewriting published history, deleting branches, or changing protection rules are not part of the normal workflow and require separate instructions.

@@ -30,6 +30,10 @@ const MICROPHONE: &[&str] = &[
 const FINISH: &[&str] = &[
     "Submit dictation",
     "Confirm dictation",
+    "Stop dictation",
+    "Stop recording",
+    "Arrêter la dictée",
+    "Arrêter l'enregistrement",
     "Valider la dictée",
     "Confirmer la dictée",
     "Transcrire",
@@ -38,18 +42,16 @@ const FINISH: &[&str] = &[
 const SEND: &[&str] = &[
     "Send prompt",
     "Send message",
-    "Send",
+    "Envoyer le prompt",
     "Envoyer le message",
+    "Envoyer la demande",
+    "Send",
     "Envoyer",
 ];
 const CANCEL: &[&str] = &[
     "Cancel dictation",
-    "Stop dictation",
-    "Stop this dictation",
     "Annuler la dictée",
-    "Arrêter la dictée",
-    "Cancel",
-    "Annuler",
+    "Stop this dictation",
 ];
 
 fn process_path(id: u32) -> Option<PathBuf> {
@@ -69,39 +71,107 @@ fn process_path(id: u32) -> Option<PathBuf> {
     }
 }
 
-fn is_chatgpt(path: &std::path::Path) -> bool {
-    path.file_name().map_or(false, |name| {
-        name.to_string_lossy().eq_ignore_ascii_case("ChatGPT.exe")
-    })
+#[derive(Default)]
+struct WindowInventory {
+    process_ids: Vec<u32>,
+    windows: Vec<HWND>,
+    owned: usize,
+    hidden: usize,
+    path_unavailable: usize,
+    hidden_main: Vec<HWND>,
+}
+
+fn chatgpt_process_ids() -> Result<Vec<u32>> {
+    unsafe {
+        let snapshot =
+            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e| e.to_string())?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut ids = Vec::new();
+        if Process32FirstW(snapshot, &mut entry).as_bool() {
+            loop {
+                let length = entry
+                    .szExeFile
+                    .iter()
+                    .position(|c| *c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                if String::from_utf16_lossy(&entry.szExeFile[..length])
+                    .eq_ignore_ascii_case("ChatGPT.exe")
+                {
+                    ids.push(entry.th32ProcessID);
+                }
+                if !Process32NextW(snapshot, &mut entry).as_bool() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+        Ok(ids)
+    }
 }
 
 unsafe extern "system" fn collect_window(window: HWND, data: LPARAM) -> BOOL {
+    let inventory = &mut *(data.0 as *mut WindowInventory);
     let mut id = 0;
     GetWindowThreadProcessId(window, Some(&mut id));
-    if IsWindowVisible(window).as_bool()
-        && GetWindow(window, GW_OWNER).0 == 0
-        && process_path(id).map_or(false, |path| is_chatgpt(&path))
-    {
-        (*(data.0 as *mut Vec<HWND>)).push(window);
+    if inventory.process_ids.contains(&id) {
+        if process_path(id).is_none() {
+            inventory.path_unavailable += 1;
+        }
+        if !IsWindowVisible(window).as_bool() {
+            inventory.hidden += 1;
+            let mut class = [0u16; 128];
+            let length = GetClassNameW(window, &mut class) as usize;
+            let browser_window = String::from_utf16_lossy(&class[..length]) == "Chrome_WidgetWin_1";
+            let captioned = GetWindowLongPtrW(window, GWL_STYLE) as u32 & WS_CAPTION.0 != 0;
+            if GetWindow(window, GW_OWNER).0 == 0
+                && GetWindowTextLengthW(window) > 0
+                && (browser_window || captioned)
+            {
+                inventory.hidden_main.push(window);
+            }
+        } else {
+            if GetWindow(window, GW_OWNER).0 != 0 {
+                inventory.owned += 1;
+            }
+            inventory.windows.push(window);
+        }
     }
     BOOL(1)
 }
 
-fn window() -> Result<HWND> {
-    let mut windows: Vec<HWND> = Vec::new();
+fn window_inventory() -> Result<WindowInventory> {
+    let mut inventory = WindowInventory {
+        process_ids: chatgpt_process_ids()?,
+        ..Default::default()
+    };
     unsafe {
         EnumWindows(
             Some(collect_window),
-            LPARAM(&mut windows as *mut _ as isize),
+            LPARAM(&mut inventory as *mut _ as isize),
         )
         .ok()
         .map_err(|e| e.to_string())?;
-        let foreground = GetForegroundWindow();
-        if windows.contains(&foreground) {
-            return Ok(foreground);
-        }
     }
-    match windows.as_slice() {
+    Ok(inventory)
+}
+
+fn window() -> Result<HWND> {
+    let inventory = window_inventory()?;
+    let windows = inventory.windows;
+    let foreground = unsafe { GetForegroundWindow() };
+    if windows.contains(&foreground) {
+        return Ok(foreground);
+    }
+    let roots: Vec<_> = windows
+        .iter()
+        .copied()
+        .filter(|window| unsafe { GetWindow(*window, GW_OWNER).0 == 0 })
+        .collect();
+    let candidates = if roots.is_empty() { &windows } else { &roots };
+    match candidates.as_slice() {
         [window] => Ok(*window),
         [] => Err("No ChatGPT window is available. Open the app or enter its .exe path in settings.".into()),
         _ => Err("Multiple ChatGPT windows are open. Bring the intended window to the foreground and try again.".into()),
@@ -146,6 +216,29 @@ pub fn open(settings: &Settings) -> Result<()> {
         unsafe {
             ShowWindow(window, SW_RESTORE);
             SetForegroundWindow(window);
+        }
+        return Ok(());
+    }
+    let inventory = window_inventory()?;
+    let primary: Vec<_> = inventory
+        .hidden_main
+        .iter()
+        .copied()
+        .filter(|window| unsafe {
+            let mut title = [0u16; 128];
+            let length = GetWindowTextW(*window, &mut title) as usize;
+            String::from_utf16_lossy(&title[..length]).eq_ignore_ascii_case("ChatGPT")
+        })
+        .collect();
+    let restorable = if primary.len() == 1 {
+        primary.as_slice()
+    } else {
+        inventory.hidden_main.as_slice()
+    };
+    if let [main] = restorable {
+        unsafe {
+            ShowWindow(*main, SW_RESTORE);
+            SetForegroundWindow(*main);
         }
         return Ok(());
     }
@@ -238,7 +331,7 @@ impl ChatGpt {
     }
 
     fn find(&self, custom: &str, aliases: &[&str]) -> Result<Option<IUIAutomationElement>> {
-        let mut found = None;
+        let mut matches = Vec::new();
         for button in self.buttons()? {
             let name = unsafe { button.CurrentName() }
                 .map_err(|e| e.to_string())?
@@ -246,15 +339,28 @@ impl ChatGpt {
             if matches_name(&name, custom, aliases)
                 && unsafe { button.CurrentIsEnabled() }.map_or(false, |value| value.as_bool())
             {
-                if found.is_some() {
-                    return Err(
-                        "Multiple buttons match. Set an exact label in settings.json.".into(),
-                    );
-                }
-                found = Some(button);
+                let priority = if custom.is_empty() {
+                    aliases
+                        .iter()
+                        .position(|alias| name.trim().to_lowercase() == alias.to_lowercase())
+                        .unwrap()
+                } else {
+                    0
+                };
+                matches.push((priority, button, name));
             }
         }
-        Ok(found)
+        let Some(priority) = matches.iter().map(|(priority, _, _)| *priority).min() else {
+            return Ok(None);
+        };
+        let mut preferred = matches
+            .into_iter()
+            .filter(|(candidate, _, _)| *candidate == priority);
+        let (_, button, name) = preferred.next().unwrap();
+        if preferred.next().is_some() {
+            return Err(format!("Multiple visible buttons have the same label '{name}'. Set a more specific label in settings.json."));
+        }
+        Ok(Some(button))
     }
 
     fn invoke(&self, custom: &str, aliases: &[&str], description: &str) -> Result<bool> {
@@ -272,20 +378,25 @@ impl ChatGpt {
         Ok(true)
     }
 
-    pub fn new_chat(&self) -> Result<()> {
+    pub fn new_chat(&self) -> Result<bool> {
         unsafe {
             ShowWindow(self.window, SW_RESTORE);
             SetForegroundWindow(self.window);
         }
-        if self.invoke("", NEW_CHAT, "new chat")? {
-            Ok(())
-        } else {
-            Err("New chat button not found. Switch ChatGPT to its Chat view and try again.".into())
-        }
+        self.invoke("", NEW_CHAT, "new chat")
     }
 
     pub fn start(&self, settings: &Settings) -> Result<bool> {
         self.invoke(&settings.microphone_button, MICROPHONE, "dictation")
+    }
+
+    pub fn recording_ready(&self, settings: &Settings) -> Result<bool> {
+        Ok(self.find(&settings.finish_button, FINISH)?.is_some()
+            && self.find(&settings.cancel_button, CANCEL)?.is_some())
+    }
+
+    pub fn cancel_if_present(&self, settings: &Settings) -> Result<bool> {
+        self.invoke(&settings.cancel_button, CANCEL, "dictation cancellation")
     }
 
     pub fn finish(&self, settings: &Settings) -> Result<()> {
@@ -326,12 +437,15 @@ fn matches_name(name: &str, custom: &str, aliases: &[&str]) -> bool {
 }
 
 pub fn diagnostic(settings: &Settings) -> Result<String> {
+    let inventory = window_inventory()?;
+    let discovery = format!("Window discovery: {} ChatGPT processes, {} visible windows, {} hidden windows ({} restorable main windows), {} owned windows, {} unavailable process paths.",
+        inventory.process_ids.len(), inventory.windows.len(), inventory.hidden, inventory.hidden_main.len(), inventory.owned, inventory.path_unavailable);
     let chat = match ChatGpt::connect() {
         Ok(chat) => chat,
-        Err(error) => return Ok(format!("ChatGPT: {error}")),
+        Err(error) => return Ok(format!("{discovery}\nChatGPT: {error}")),
     };
     let mut report =
-        String::from("ChatGPT window found. Available controls (no action performed):");
+        format!("{discovery}\nChatGPT window found. Available controls (no action performed):");
     for (description, custom, aliases) in [
         ("New conversation", "", NEW_CHAT),
         ("Dictation", settings.microphone_button.as_str(), MICROPHONE),
@@ -365,6 +479,9 @@ mod tests {
         assert!(matches_name("Dicter", "", MICROPHONE));
         assert!(!matches_name("Start voice mode", "", MICROPHONE));
         assert!(!matches_name("Stop this dictation", "", FINISH));
+        assert!(matches_name("Arrêter la dictée", "", FINISH));
+        assert!(!matches_name("Arrêter la dictée", "", CANCEL));
+        assert!(!matches_name("Annuler", "", CANCEL));
         assert!(!matches_name("Send feedback", "", SEND));
         assert!(matches_name(
             "My dictation button",
@@ -372,5 +489,112 @@ mod tests {
             MICROPHONE
         ));
         assert!(!matches_name("Dictate", "My dictation button", MICROPHONE));
+    }
+
+    #[test]
+    #[ignore = "Opens a new ChatGPT chat, briefly starts dictation and cancels it; never sends"]
+    fn native_dictation_starts_and_can_be_cancelled() {
+        let _com = crate::platform::Com::new().unwrap();
+        let settings = Settings::default();
+        open(&settings).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let chat = loop {
+            match ChatGpt::connect() {
+                Ok(chat) => break chat,
+                Err(error) if std::time::Instant::now() >= deadline => panic!("{error}"),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while chat.find("", NEW_CHAT).unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "New chat control must become ready"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        chat.new_chat().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let mut monitor = crate::platform::audio::Microphone::open().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !chat.start(&settings).unwrap() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Dictation control must become ready"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut names = Vec::new();
+        let mut ready = false;
+        while std::time::Instant::now() < deadline {
+            names = chat
+                .buttons()
+                .unwrap()
+                .iter()
+                .filter_map(|button| unsafe { button.CurrentName().ok() })
+                .map(|name| name.to_string())
+                .filter(|name| {
+                    matches_name(name, "", CANCEL)
+                        || matches_name(name, "", FINISH)
+                        || matches_name(name, "", SEND)
+                })
+                .collect();
+            if chat
+                .find(&settings.cancel_button, CANCEL)
+                .unwrap()
+                .is_some()
+            {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let finish_available = chat
+            .find(&settings.finish_button, FINISH)
+            .unwrap()
+            .is_some();
+        let monitor_result = (|| -> Result<()> {
+            monitor.start()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while std::time::Instant::now() < deadline {
+                if monitor.next_level()?.is_some() {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err("No silence-monitor buffer arrived while ChatGPT was recording.".into())
+        })();
+        drop(monitor);
+        let cancellation = chat.cancel(&settings);
+        assert!(ready, "Recording cancellation must be available; controls: {names:?}; cancellation: {cancellation:?}");
+        cancellation.unwrap();
+        assert!(
+            finish_available,
+            "Recording confirmation must be available; controls: {names:?}"
+        );
+        monitor_result.unwrap();
+    }
+
+    #[test]
+    #[ignore = "Restores the installed ChatGPT window and reads controls; does not record or send"]
+    fn restored_chatgpt_window_exposes_controls() {
+        let _com = crate::platform::Com::new().unwrap();
+        let settings = Settings::default();
+        open(&settings).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match ChatGpt::connect() {
+                Ok(chat) => {
+                    println!("{}", diagnostic(&settings).unwrap());
+                    assert!(!chat.buttons().unwrap().is_empty());
+                    return;
+                }
+                Err(error) if std::time::Instant::now() >= deadline => {
+                    panic!("{error}; {}", diagnostic(&settings).unwrap())
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            }
+        }
     }
 }

@@ -22,14 +22,18 @@ Click **Start listening**, then say the configured phrase. **Live debug** is ena
 
 The grammar remains restricted to configured triggers. This is not a general transcript of everything said. A ChatGPT action can fail after successful phrase recognition; the journal keeps those stages separate.
 
-## When “Dit ChatGPT” does not react
+SAPI confidence is categorical: `1` means high, `0` means normal, and `-1` means low. It is not an error code or a probability. High and normal recognition can trigger an action; low-confidence matches are rejected.
+
+## When “Ok GPT” does not react
 
 1. Check the listening status after **Start listening**.
-2. Find **Armed trigger: 'Dit ChatGPT'** in the journal.
+2. Find **Armed trigger: 'Ok GPT'** in the journal.
 3. Check **Input:** and whether the input bar changes when you speak.
 4. If audio is absent, check the default microphone and desktop-app microphone access in Windows.
 5. If sound appears but recognition is rejected, check the language and try speaking clearly or using a longer phrase.
 6. If **Trigger detected** appears but ChatGPT does not open, read the subsequent action error and [integration guidance](chatgpt.md).
+
+The action log now shows each stage: restoring the app, waiting for its window, creating a conversation, waiting for navigation, starting dictation, confirming recording controls, waiting for silence, transcribing, and sending. An Invoke call alone is not treated as proof that recording started.
 
 ## Resource use and privacy
 
