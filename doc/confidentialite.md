@@ -12,7 +12,7 @@ Le `.gitignore` exclut notamment :
 - les configurations personnelles, diagnostics, journaux et fichiers temporaires ;
 - les fichiers `.env`, clés privées et certificats ;
 - les dossiers de travail Claude, Codex et agents ;
-- `ForAi.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `AI.md` et `*.ai.md` ;
+- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `AI.md` et `*.ai.md` ;
 - le suivi local `tracking/` et les réglages d'éditeur.
 
-`Cargo.lock`, les sources, `README.md`, `doc/` et la licence MIT sont destinés au dépôt. Un `.gitignore` ne retire pas un secret déjà suivi par Git : vérifiez toujours `git diff --cached` avant publication. Les exemples de documentation doivent rester génériques, sans jeton, chemin personnel ou donnée de conversation.
+`ForAi.md` est volontairement versionné, à la demande du propriétaire, avec des consignes génériques sans données sensibles. `Cargo.lock`, les sources, `README.md`, `doc/` et la licence MIT sont aussi destinés au dépôt. Un `.gitignore` ne retire pas un secret déjà suivi par Git : vérifiez toujours `git diff --cached` avant publication. Les exemples de documentation doivent rester génériques, sans jeton, chemin personnel ou donnée de conversation.

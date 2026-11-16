@@ -25,7 +25,7 @@ cargo build --release --locked
 
 Ajoutez une vérification ciblée du comportement modifié. Les tests matériels ignorés par défaut doivent être exécutés explicitement sur une machine disposant du microphone ou du moteur requis. Un changement documentaire seul demande une relecture et une vérification des liens et commandes ; il ne nécessite pas de nouveaux tests qui reproduisent le texte.
 
-Avant chaque commit et push, inspectez les fichiers indexés et vérifiez les exclusions de [confidentialité](confidentialite.md). `ForAi.md`, le suivi local, les configurations personnelles et les données sensibles restent exclus de Git. Utilisez une identité de commit configurée avec une adresse GitHub sans réponse lorsque la confidentialité de l'adresse électronique doit être préservée.
+Avant chaque commit et push, inspectez les fichiers indexés et vérifiez les exclusions de [confidentialité](confidentialite.md). `ForAi.md` est versionné et conserve les règles du projet pour les IA ; son contenu ne doit pas contenir de données sensibles. Le suivi local, les dossiers de travail des IA et les configurations personnelles restent exclus de Git. Utilisez une identité de commit configurée avec une adresse GitHub sans réponse lorsque la confidentialité de l'adresse électronique doit être préservée.
 
 ## Fusion et publication
 

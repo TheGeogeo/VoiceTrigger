@@ -26,8 +26,7 @@ codex/
 agent/
 agents/
 tracking/
-ForAi.md
-ForAI.md
+# ForAi.md is intentionally versioned as the project's AI guidance.
 AGENTS.md
 AGENT.md
 CLAUDE.md
