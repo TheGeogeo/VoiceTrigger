@@ -42,6 +42,10 @@ Build an economical Windows background application in Rust. A user-defined spoke
 
 Force pushes, rewriting published history, deleting branches, and changing repository protections require separate instructions. The public workflow is also documented in `doc/development.md`.
 
+## Release publication
+
+Publish releases only when explicitly requested by the owner. Use an unused version tag on verified main and follow `doc/releasing.md`. Prepare artifacts with `scripts/package-release.ps1`: derive compiler-path remapping from the environment, verify the x64 executable, and package only explicit public files with dependency notices and SHA-256 sums. Never upload settings, test fixtures, logs, AI state or local build paths. Verify downloaded draft assets before publishing; preserve existing tags and published assets.
+
 ## Verification
 
 ```powershell

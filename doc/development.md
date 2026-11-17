@@ -46,3 +46,5 @@ Fetch the latest `main`, integrate changes into the feature branch if needed, an
 The squash commit message must be detailed: describe the original failure or need, the implemented behavior, meaningful design choices, affected components, checks actually executed, and remaining limitations. Explain concrete triggers and outcomes when they help a reviewer. Keep private data, secrets, and unrelated work out of the message.
 
 Push `main` after merging and compare local and remote commit identifiers. Delivery reports must identify actual commits, checks, and remaining limits. Force pushes, rewriting published history, deleting branches, or changing protection rules are not part of the normal workflow and require separate instructions.
+
+GitHub releases are separate from ordinary feature publication and require an explicit request. Follow the [release guide](releasing.md) for compiler-path remapping, portable assets, license notices, checksums and verified draft publication.

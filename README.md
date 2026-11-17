@@ -6,6 +6,10 @@ VoiceTrigger uses the local Windows SAPI recognizer and stays in the notificatio
 
 ## Getting started
 
+Download the [Windows x64 portable release](https://github.com/TheGeogeo/VoiceTrigger/releases/latest), extract its ZIP and run `voice-trigger.exe`. The ZIP includes documentation and license notices. Existing settings remain under `%APPDATA%\VoiceTrigger`.
+
+The Windows executable uses the x64 Microsoft Visual C++ v14 runtime. Microsoft's [supported runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) provide the required redistributable.
+
 Requirements: Windows 10/11, a working default microphone, and an installed SAPI recognition engine for the selected language. Building requires Rust 1.72 or newer and the MSVC build tools.
 
 ```powershell
@@ -50,6 +54,7 @@ ChatGPT integration depends on the installed app's accessible controls. Open Cha
 - [Architecture and resource use](doc/architecture.md)
 - [Privacy and Git exclusions](doc/privacy.md)
 - [Development, branches, and delivery](doc/development.md)
+- [Building and publishing Windows releases](doc/releasing.md)
 - [Project guidance for AI contributors](ForAi.md)
 
 ## Development checks
