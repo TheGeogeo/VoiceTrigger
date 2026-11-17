@@ -27,6 +27,13 @@ impl Action {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Trigger {
     pub phrase: String,
@@ -44,6 +51,7 @@ pub struct Settings {
     pub finish_button: String,
     pub send_button: String,
     pub cancel_button: String,
+    pub appearance: Appearance,
 }
 
 impl Default for Settings {
@@ -60,6 +68,7 @@ impl Default for Settings {
             finish_button: String::new(),
             send_button: String::new(),
             cancel_button: String::new(),
+            appearance: Appearance::Light,
         }
     }
 }
@@ -221,6 +230,22 @@ mod tests {
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn appearance_defaults_to_light_and_round_trips() {
+        let legacy: Settings =
+            serde_json::from_str(r#"{"triggers":[{"phrase":"Hello","action":"OpenChatGpt"}]}"#)
+                .unwrap();
+        assert_eq!(legacy.appearance, Appearance::Light);
+        assert_eq!(legacy.triggers[0].phrase, "Hello");
+        let settings = Settings {
+            appearance: Appearance::Dark,
+            ..Settings::default()
+        };
+        let text = serde_json::to_string(&settings).unwrap();
+        assert!(text.contains(r#""appearance":"Dark""#));
+        assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), settings);
     }
 
     #[test]

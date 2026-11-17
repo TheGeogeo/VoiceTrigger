@@ -33,7 +33,7 @@ cargo test --locked -- --include-ignored --test-threads=1
 
 The full suite includes a 220-second real-microphone SAPI soak, with a recognizer restart and both live-debug settings. See [native crash diagnostics](debug.md#unexpected-application-termination) for the original null-pointer regression and a focused soak command. When only SAPI changes, unrelated ChatGPT desktop tests can be skipped explicitly; report those omissions rather than claiming a complete desktop rerun.
 
-Interface changes also have an [isolated native desktop test](interface.md#native-interface-verification) that exercises real controls and creates window-only captures for review. It is ignored in ordinary test runs and included in the explicit full suite. Inspect actual output at minimum size and scaled layouts; a successful build alone is insufficient.
+Interface changes also have an [isolated native desktop test](interface.md#native-interface-verification) that exercises real controls and creates window-only captures for review. It is ignored in ordinary test runs and included in the explicit full suite. Inspect actual output in both themes at minimum, default, large and scaled layouts; a successful build alone is insufficient. The ordinary layout unit tests must keep passing: they reject any control that leaves the window, crosses a card edge or overlaps another control.
 
 Documentation-only changes require review of content, commands, and links; they do not need tests that mirror the text.
 

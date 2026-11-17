@@ -24,17 +24,19 @@ cargo build --release --locked
 5. After speech, three seconds of silence confirm dictation and send the transcription when ChatGPT exposes the required controls.
 6. Click **Hide to tray** to keep listening in the background. Closing or minimizing the window also hides it.
 
-Double-click the notification icon to restore the window. Its menu can stop listening or quit. **Quit** closes the application completely. Only one instance runs at a time; launching it again restores the existing window. Listening starts only after **Start listening** is clicked.
+Double-click the notification icon to restore the window. Its menu can stop listening or quit. **Quit** (or **Ctrl+Q**) closes the application completely. Only one instance runs at a time; launching it again restores the existing window. Listening starts only after **Start listening** is clicked.
 
 **“Ok GPT”** is the default for new configurations. Existing saved trigger phrases are preserved. Edit and save your selected trigger if you want to change an existing configuration.
 
 ## Interface
 
-![VoiceTrigger with default trigger settings](doc/images/interface.png)
+![VoiceTrigger with default trigger settings, light theme](doc/images/interface.png)
 
-The resizable native interface has four pages: **Triggers**, **Settings**, **Diagnostics**, and **Credits**. Start/Stop, configuration saving and hiding to the notification area remain available across pages. Diagnostics separates live activity from full system-check reports. Credits includes the author, version, project links and MIT license.
+![VoiceTrigger settings, dark theme](doc/images/interface-dark.png)
 
-Use **File**, **View**, and **Help** for menu commands. **Ctrl+1** through **Ctrl+4** switch pages, **Ctrl+S** saves, and **F1** opens Credits. See the [interface guide](doc/interface.md).
+The resizable native window is a single surface with a sidebar for four pages: **Triggers**, **Settings**, **Diagnostics**, and **Credits**. Start/Stop, configuration saving and hiding to the notification area remain available across pages. The content always fits the window, from the 960 × 600 minimum to maximized, and follows Windows display scaling. **Settings > Appearance** switches between a **Light** and a **Dark** theme; the choice applies to the whole window, including the title bar, and is saved immediately. Diagnostics separates live activity from full system-check reports. Credits includes the author, version, project links and MIT license.
+
+**Ctrl+1** through **Ctrl+4** switch pages, **Ctrl+S** saves, **Ctrl+Q** quits, and **F1** opens Credits. Documentation and source links are on **Credits**. See the [interface guide](doc/interface.md).
 
 ## Available actions
 

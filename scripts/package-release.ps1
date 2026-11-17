@@ -82,7 +82,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination (Join-Path $package 'LICENSE')
     $readme = [IO.File]::ReadAllText((Join-Path $workspace 'resources/portable-README.txt')).Replace('@VERSION@', $version)
     [IO.File]::WriteAllText((Join-Path $package 'README.txt'), $readme, [Text.UTF8Encoding]::new($false))
-    $publicDocs = @('architecture.md', 'chatgpt.md', 'debug.md', 'development.md', 'interface.md', 'privacy.md', 'usage.md', 'releasing.md', 'images/interface.png')
+    $publicDocs = @('architecture.md', 'chatgpt.md', 'debug.md', 'development.md', 'interface.md', 'privacy.md', 'usage.md', 'releasing.md', 'images/interface.png', 'images/interface-dark.png')
     foreach ($relative in $publicDocs) {
         $destination = Join-Path $package "doc/$relative"
         [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null

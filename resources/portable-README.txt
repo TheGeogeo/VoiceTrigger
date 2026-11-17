@@ -19,7 +19,9 @@ Requirements
 
 Use Diagnostics > Activity for recognition events and microphone levels.
 Use Diagnostics > System checks > Run checks to inspect the integration.
-Hide to tray keeps listening active. File > Quit exits the application.
+Settings > Appearance switches between the Light and Dark themes.
+Hide to tray keeps listening active. Ctrl+Q or the notification icon's
+Quit command exits the application.
 
 Settings are stored in %APPDATA%\VoiceTrigger, outside this download.
 Existing custom trigger phrases are preserved. No API key is required.

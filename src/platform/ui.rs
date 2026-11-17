@@ -2,7 +2,7 @@ use super::{
     engine::{Event, Events, Worker},
     wide, Result,
 };
-use crate::config::{Action, Settings, Trigger};
+use crate::config::{Action, Appearance, Settings, Trigger};
 use crate::journal::Journal;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -14,11 +14,13 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, BST_CHECKED, DRAWITEMSTRUCT, EM_SCROLLCARET, EM_SETSEL,
-    ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, MEASUREITEMSTRUCT, PBM_SETPOS, PBM_SETRANGE32,
+    InitCommonControlsEx, SetWindowTheme, DRAWITEMSTRUCT, ICC_STANDARD_CLASSES,
+    INITCOMMONCONTROLSEX, MEASUREITEMSTRUCT, ODT_COMBOBOX, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::HiDpi::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetFocus, IsWindowEnabled, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 mod layout;
@@ -63,8 +65,9 @@ const REPOSITORY: u16 = 210;
 const DOCUMENTATION: u16 = 211;
 const ACTIVITY_TAB: u16 = 220;
 const CHECKS_TAB: u16 = 221;
+const THEME_LIGHT: u16 = 230;
+const THEME_DARK: u16 = 231;
 const BRAND: u16 = 300;
-const BRAND_HINT: u16 = 301;
 const VERSION: u16 = 302;
 const MODE: u16 = 303;
 const PAGE_TITLE: u16 = 304;
@@ -94,8 +97,11 @@ const CREDIT_BUILT: u16 = 343;
 const CREDIT_LIBRARIES: u16 = 344;
 const LICENSE_TITLE: u16 = 345;
 const LICENSE_TEXT: u16 = 346;
+const APPEARANCE_TITLE: u16 = 350;
+const THEME_LABEL: u16 = 351;
+const THEME_HINT: u16 = 352;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
     Triggers,
     Settings,
@@ -117,7 +123,7 @@ impl Page {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DiagnosticTab {
     Activity,
     Checks,
@@ -131,21 +137,20 @@ impl DiagnosticTab {
         }
     }
 }
+
+/// Paint-only view state. It never borrows the application, so native
+/// painting and subclass callbacks can read it during reentrant messages.
 struct ViewState {
     page: Cell<Page>,
     diagnostic_tab: Cell<DiagnosticTab>,
     listening: Cell<bool>,
-}
-#[derive(Clone, Copy)]
-enum Scope {
-    Global,
-    Section(Page),
-    Diagnostic(DiagnosticTab),
+    live_debug: Cell<bool>,
+    level: Cell<u8>,
+    hover: Cell<isize>,
 }
 struct Control {
     id: u16,
     handle: HWND,
-    scope: Scope,
     font: Font,
 }
 
@@ -159,7 +164,6 @@ struct WindowState {
 }
 struct App {
     window: HWND,
-    menu: HMENU,
     settings: Settings,
     path: PathBuf,
     theme: Rc<Theme>,
@@ -190,12 +194,12 @@ impl App {
         SetWindowTextW(self.child(id), PCWSTR(wide(text).as_ptr()));
     }
     unsafe fn select_page(&self, page: Page) {
-        self.view.page.set(page);
+        let previous = self.view.page.replace(page);
         let (title, hint) = match page {
             Page::Triggers => ("Triggers", "Choose a phrase and the action it runs."),
             Page::Settings => (
                 "Settings",
-                "Configure local recognition and ChatGPT dictation.",
+                "Appearance, local recognition and ChatGPT dictation.",
             ),
             Page::Diagnostics => (
                 "Diagnostics",
@@ -205,14 +209,10 @@ impl App {
         };
         self.set_text(PAGE_TITLE, title);
         self.set_text(PAGE_HINT, hint);
-        CheckMenuRadioItem(
-            GetSubMenu(self.menu, 1),
-            NAV_TRIGGERS as u32,
-            NAV_CREDITS as u32,
-            page.id() as u32,
-            MF_BYCOMMAND.0,
-        );
         self.layout();
+        for id in [previous.id(), page.id()] {
+            InvalidateRect(self.child(id), None, false);
+        }
         self.update_debug();
         SetFocus(self.child(page.id()));
     }
@@ -222,19 +222,29 @@ impl App {
         let end = GetWindowTextLengthW(self.child(LOG)) as usize;
         SendMessageW(
             self.child(LOG),
-            EM_SETSEL,
+            windows::Win32::UI::Controls::EM_SETSEL,
             WPARAM(end),
             LPARAM(end as isize),
         );
-        SendMessageW(self.child(LOG), EM_SCROLLCARET, WPARAM(0), LPARAM(0));
+        SendMessageW(
+            self.child(LOG),
+            windows::Win32::UI::Controls::EM_SCROLLCARET,
+            WPARAM(0),
+            LPARAM(0),
+        );
     }
 
     unsafe fn debug_enabled(&self) -> bool {
         IsWindowVisible(self.window).as_bool()
             && self.view.page.get() == Page::Diagnostics
             && self.view.diagnostic_tab.get() == DiagnosticTab::Activity
-            && SendMessageW(self.child(DEBUG), BM_GETCHECK, WPARAM(0), LPARAM(0)).0
-                == BST_CHECKED.0 as isize
+            && self.view.live_debug.get()
+    }
+
+    unsafe fn set_level(&self, level: u8) {
+        if self.view.level.replace(level) != level {
+            InvalidateRect(self.child(METER), None, false);
+        }
     }
 
     unsafe fn update_debug(&self) {
@@ -246,7 +256,7 @@ impl App {
         }
         if !enabled && self.worker.is_some() {
             self.set_text(LEVEL, "Live debug paused; trigger listening is unchanged.");
-            SendMessageW(self.child(METER), PBM_SETPOS, WPARAM(0), LPARAM(0));
+            self.set_level(0);
         }
     }
 
@@ -310,17 +320,20 @@ impl App {
                 _ => "This action does not require a target.",
             },
         );
+        InvalidateRect(self.window, None, false);
     }
 
     unsafe fn update_controls(&self, listening: bool) {
+        let focus = GetFocus();
+        let had_focus = focus == self.child(START) || focus == self.child(STOP);
         for id in [
             LIST, PHRASE, ACTION, APPLY, ADD, DELETE, SAVE, START, LANGUAGE, THRESHOLD, CHAT_PATH,
         ] {
             EnableWindow(self.child(id), !listening);
         }
         EnableWindow(self.child(STOP), listening);
-        self.target_enabled();
         self.view.listening.set(listening);
+        self.target_enabled();
         self.set_text(
             MODE,
             if listening {
@@ -329,22 +342,87 @@ impl App {
                 "Not listening"
             },
         );
-        EnableMenuItem(
-            GetSubMenu(self.menu, 0),
-            SAVE as u32,
-            MF_BYCOMMAND | if listening { MF_GRAYED } else { MF_ENABLED },
+        self.layout();
+        if had_focus {
+            SetFocus(self.child(if listening { STOP } else { START }));
+        }
+        RedrawWindow(self.window, None, None, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    }
+
+    /// Applies the current palette to the title bar, scroll bars and controls.
+    unsafe fn apply_theme(&self) {
+        self.theme.apply_frame(self.window);
+        let name = if self.theme.palette().dark {
+            w!("DarkMode_Explorer")
+        } else {
+            w!("Explorer")
+        };
+        for id in [LIST, LOG, REPORT, LICENSE_TEXT] {
+            let _ = SetWindowTheme(self.child(id), name, PCWSTR::null());
+        }
+        RedrawWindow(
+            self.window,
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME,
         );
-        EnableMenuItem(
-            GetSubMenu(self.menu, 0),
-            START as u32,
-            MF_BYCOMMAND | if listening { MF_GRAYED } else { MF_ENABLED },
+    }
+
+    /// Applies a theme immediately and stores only that preference, leaving
+    /// unsaved trigger and setting edits out of the configuration file.
+    unsafe fn set_appearance(&mut self, appearance: Appearance) -> Result<()> {
+        if self.settings.appearance == appearance {
+            return Ok(());
+        }
+        self.settings.appearance = appearance;
+        self.theme.set_appearance(appearance);
+        self.apply_theme();
+        let mut stored = Settings::load(&self.path)?;
+        stored.appearance = appearance;
+        stored.save(&self.path)?;
+        self.set_text(
+            STATUS,
+            match appearance {
+                Appearance::Light => "Light theme applied and saved.",
+                Appearance::Dark => "Dark theme applied and saved.",
+            },
         );
-        EnableMenuItem(
-            GetSubMenu(self.menu, 0),
-            STOP as u32,
-            MF_BYCOMMAND | if listening { MF_ENABLED } else { MF_GRAYED },
-        );
-        InvalidateRect(self.window, None, false);
+        Ok(())
+    }
+
+    unsafe fn change_dpi(&self, dpi: u32) {
+        let (fonts, icons) = self.theme.change_dpi(dpi);
+        for control in &self.controls {
+            SendMessageW(
+                control.handle,
+                WM_SETFONT,
+                WPARAM(self.theme.font(control.font).0 as usize),
+                LPARAM(1),
+            );
+        }
+        self.size_lists();
+        self.set_icons();
+        for font in fonts {
+            DeleteObject(font);
+        }
+        for icon in icons {
+            DestroyIcon(icon);
+        }
+        if self.tray {
+            self.notify(NIM_MODIFY, "VoiceTrigger");
+        }
+    }
+
+    unsafe fn set_icons(&self) {
+        for (kind, class, large) in [
+            (ICON_SMALL, GCLP_HICONSM, false),
+            (ICON_BIG, GCLP_HICON, true),
+        ] {
+            let icon = self.theme.icon(large).0;
+            // The class keeps no reference to icons retired after a DPI change.
+            SetClassLongPtrW(self.window, class, icon);
+            SendMessageW(self.window, WM_SETICON, WPARAM(kind as usize), LPARAM(icon));
+        }
     }
 
     unsafe fn read_settings(&self) -> Result<Settings> {
@@ -398,14 +476,14 @@ impl App {
         Ok(())
     }
 
-    unsafe fn notify(&mut self, message: NOTIFY_ICON_MESSAGE, text: &str) -> bool {
+    unsafe fn notify(&self, message: NOTIFY_ICON_MESSAGE, text: &str) -> bool {
         let mut data = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: self.window,
             uID: 1,
             uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
             uCallbackMessage: TRAY_MESSAGE,
-            hIcon: LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
+            hIcon: self.theme.icon(false),
             ..Default::default()
         };
         for (target, source) in data.szTip.iter_mut().take(127).zip(text.encode_utf16()) {
@@ -429,7 +507,15 @@ impl App {
     }
 
     unsafe fn show(&self) {
-        ShowWindow(self.window, SW_RESTORE);
+        // Restore minimized windows, but keep a maximized window maximized.
+        ShowWindow(
+            self.window,
+            if IsIconic(self.window).as_bool() {
+                SW_RESTORE
+            } else {
+                SW_SHOW
+            },
+        );
         SetForegroundWindow(self.window);
         self.layout();
         self.update_debug();
@@ -451,8 +537,13 @@ impl App {
                     DiagnosticTab::Checks
                 });
                 self.layout();
+                for tab in [ACTIVITY_TAB, CHECKS_TAB] {
+                    InvalidateRect(self.child(tab), None, false);
+                }
                 self.update_debug();
             }
+            THEME_LIGHT => self.set_appearance(Appearance::Light)?,
+            THEME_DARK => self.set_appearance(Appearance::Dark)?,
             REPOSITORY => super::chatgpt::open_url("https://github.com/TheGeogeo/VoiceTrigger")?,
             DOCUMENTATION => super::chatgpt::open_url(
                 "https://github.com/TheGeogeo/VoiceTrigger/blob/main/README.md",
@@ -522,6 +613,8 @@ impl App {
             }
             HIDE => self.hide()?,
             DEBUG => {
+                self.view.live_debug.set(!self.view.live_debug.get());
+                InvalidateRect(self.child(DEBUG), None, false);
                 self.update_debug();
                 self.append_log(if self.debug_enabled() {
                     "Live debug enabled."
@@ -562,7 +655,7 @@ impl App {
                     self.worker = None;
                     self.update_controls(false);
                     self.set_text(LEVEL, "Microphone: stopped");
-                    SendMessageW(self.child(METER), PBM_SETPOS, WPARAM(0), LPARAM(0));
+                    self.set_level(0);
                     self.notify(NIM_MODIFY, "VoiceTrigger - listening stopped");
                     if self.exit_when_stopped {
                         PostMessageW(self.window, QUIT_MESSAGE, WPARAM(0), LPARAM(0));
@@ -590,17 +683,77 @@ impl App {
                                 self.started.elapsed().as_secs_f32()
                             ),
                         );
-                        SendMessageW(
-                            self.child(METER),
-                            PBM_SETPOS,
-                            WPARAM(level as usize),
-                            LPARAM(0),
-                        );
+                        self.set_level(level);
                     }
                 }
             }
         }
     }
+}
+
+/// Adds hover feedback to owner-drawn buttons and paints closed selects so
+/// they match text fields. It reads only paint state, never the application.
+unsafe extern "system" fn subclass(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    select: usize,
+) -> LRESULT {
+    let pointer = GetWindowLongPtrW(GetParent(window), GWLP_USERDATA) as *const WindowState;
+    if !pointer.is_null() {
+        let state = &*pointer;
+        let hover = state.view.hover.get() == window.0;
+        match message {
+            WM_MOUSEMOVE if !hover => {
+                let previous = state.view.hover.replace(window.0);
+                if previous != 0 {
+                    InvalidateRect(HWND(previous), None, false);
+                }
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: window,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut track);
+                InvalidateRect(window, None, false);
+            }
+            WM_MOUSELEAVE if hover => {
+                state.view.hover.set(0);
+                InvalidateRect(window, None, false);
+            }
+            WM_ERASEBKGND if select != 0 => return LRESULT(1),
+            WM_PAINT if select != 0 => {
+                if wparam.0 != 0 {
+                    state
+                        .theme
+                        .paint_select(window, HDC(wparam.0 as isize), hover);
+                } else {
+                    let mut paint = PAINTSTRUCT::default();
+                    let dc = BeginPaint(window, &mut paint);
+                    state.theme.paint_select(window, dc, hover);
+                    EndPaint(window, &paint);
+                }
+                return LRESULT(0);
+            }
+            WM_PRINTCLIENT if select != 0 => {
+                state
+                    .theme
+                    .paint_select(window, HDC(wparam.0 as isize), hover);
+                return LRESULT(0);
+            }
+            WM_NCDESTROY => {
+                if hover {
+                    state.view.hover.set(0);
+                }
+                RemoveWindowSubclass(window, Some(subclass), 1);
+            }
+            _ => {}
+        }
+    }
+    DefSubclassProc(window, message, wparam, lparam)
 }
 
 unsafe extern "system" fn procedure(
@@ -630,6 +783,7 @@ unsafe extern "system" fn procedure(
                 HDC(wparam.0 as isize),
                 GetDlgCtrlID(child) as u16,
                 IsWindowEnabled(child).as_bool(),
+                message == WM_CTLCOLOREDIT,
             );
             LRESULT(brush.0)
         }
@@ -641,48 +795,56 @@ unsafe extern "system" fn procedure(
         }
         WM_MEASUREITEM => {
             let item = &mut *(lparam.0 as *mut MEASUREITEMSTRUCT);
-            item.itemHeight = state.theme.px(68) as u32;
+            item.itemHeight = state.theme.px(if item.CtlType == ODT_COMBOBOX {
+                if item.itemID == u32::MAX {
+                    layout::FIELD - 6
+                } else {
+                    layout::OPTION_HEIGHT
+                }
+            } else {
+                layout::ROW_HEIGHT
+            }) as u32;
             LRESULT(1)
         }
         WM_GETMINMAXINFO => {
             let limits = &mut *(lparam.0 as *mut MINMAXINFO);
             let mut rect = RECT {
-                right: state.theme.px(980),
-                bottom: state.theme.px(640),
+                right: state.theme.px(layout::MIN_WIDTH),
+                bottom: state.theme.px(layout::MIN_HEIGHT),
                 ..Default::default()
             };
             AdjustWindowRectExForDpi(
                 &mut rect,
                 WS_OVERLAPPEDWINDOW,
-                true,
+                false,
                 WS_EX_CONTROLPARENT,
                 state.theme.dpi.get(),
             );
+            // Never require more than the monitor's work area, so the whole
+            // window stays reachable on small or highly scaled displays.
+            let mut monitor = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let (mut width, mut height) = (rect.right - rect.left, rect.bottom - rect.top);
+            if GetMonitorInfoW(
+                MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                &mut monitor,
+            )
+            .as_bool()
+            {
+                width = width.min(monitor.rcWork.right - monitor.rcWork.left);
+                height = height.min(monitor.rcWork.bottom - monitor.rcWork.top);
+            }
             limits.ptMinTrackSize = POINT {
-                x: rect.right - rect.left,
-                y: rect.bottom - rect.top,
+                x: width,
+                y: height,
             };
             LRESULT(0)
         }
         WM_DPICHANGED => {
             if let Ok(app) = state.app.try_borrow_mut() {
-                let old = state.theme.change_dpi((wparam.0 & 0xffff) as u32);
-                for control in &app.controls {
-                    SendMessageW(
-                        control.handle,
-                        WM_SETFONT,
-                        WPARAM(state.theme.font(control.font).0 as usize),
-                        LPARAM(1),
-                    );
-                    if control.id == LIST {
-                        SendMessageW(
-                            control.handle,
-                            LB_SETITEMHEIGHT,
-                            WPARAM(0),
-                            LPARAM(state.theme.px(68) as isize),
-                        );
-                    }
-                }
+                app.change_dpi((wparam.0 & 0xffff) as u32);
                 let rect = &*(lparam.0 as *const RECT);
                 SetWindowPos(
                     window,
@@ -694,9 +856,6 @@ unsafe extern "system" fn procedure(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
                 app.layout();
-                for font in old {
-                    DeleteObject(font);
-                }
             }
             LRESULT(0)
         }
@@ -704,6 +863,20 @@ unsafe extern "system" fn procedure(
             let id = (wparam.0 & 0xffff) as u16;
             let notification = (wparam.0 >> 16) as u32;
             let from_control = lparam.0 != 0;
+            if from_control && notification != 0 {
+                // Field focus changes only repaint frames; they never borrow App.
+                match id {
+                    PHRASE | TARGET | THRESHOLD | CHAT_PATH
+                        if matches!(notification, EN_SETFOCUS | EN_KILLFOCUS) =>
+                    {
+                        InvalidateRect(window, None, false);
+                    }
+                    ACTION | LANGUAGE => {
+                        InvalidateRect(HWND(lparam.0), None, false);
+                    }
+                    _ => {}
+                }
+            }
             // Edit controls synchronously notify their parent. Do not borrow the
             // application again while a command is already updating those controls.
             if from_control
@@ -800,6 +973,7 @@ unsafe extern "system" fn procedure(
             if let Ok(mut app) = state.app.try_borrow_mut() {
                 if app.tray {
                     app.notify(NIM_DELETE, "");
+                    app.tray = false;
                 }
                 if let Some(worker) = &app.worker {
                     worker.stop();
@@ -823,52 +997,6 @@ unsafe extern "system" fn procedure(
     result
 }
 
-unsafe fn menus() -> Result<HMENU> {
-    let bar = CreateMenu().map_err(|e| e.to_string())?;
-    let file = CreatePopupMenu().map_err(|e| e.to_string())?;
-    AppendMenuW(
-        file,
-        MF_STRING,
-        SAVE as usize,
-        w!("&Save configuration\tCtrl+S"),
-    );
-    AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null());
-    AppendMenuW(file, MF_STRING, START as usize, w!("Start listening"));
-    AppendMenuW(file, MF_STRING, STOP as usize, w!("Stop listening"));
-    AppendMenuW(file, MF_STRING, HIDE as usize, w!("Hide to tray"));
-    AppendMenuW(file, MF_SEPARATOR, 0, PCWSTR::null());
-    AppendMenuW(file, MF_STRING, EXIT as usize, w!("&Quit"));
-    AppendMenuW(bar, MF_POPUP, file.0 as usize, w!("&File"));
-    let view = CreatePopupMenu().map_err(|e| e.to_string())?;
-    for (id, label) in [
-        (NAV_TRIGGERS, "&Triggers\tCtrl+1"),
-        (NAV_SETTINGS, "&Settings\tCtrl+2"),
-        (NAV_DIAGNOSTICS, "&Diagnostics\tCtrl+3"),
-        (NAV_CREDITS, "&Credits\tCtrl+4"),
-    ] {
-        AppendMenuW(view, MF_STRING, id as usize, PCWSTR(wide(label).as_ptr()));
-    }
-    AppendMenuW(bar, MF_POPUP, view.0 as usize, w!("&View"));
-    let help = CreatePopupMenu().map_err(|e| e.to_string())?;
-    AppendMenuW(
-        help,
-        MF_STRING,
-        DOCUMENTATION as usize,
-        w!("&Documentation"),
-    );
-    AppendMenuW(help, MF_STRING, REPOSITORY as usize, w!("Source code"));
-    AppendMenuW(help, MF_STRING, NAV_CREDITS as usize, w!("&Credits\tF1"));
-    AppendMenuW(bar, MF_POPUP, help.0 as usize, w!("&Help"));
-    CheckMenuRadioItem(
-        view,
-        NAV_TRIGGERS as u32,
-        NAV_CREDITS as u32,
-        NAV_TRIGGERS as u32,
-        MF_BYCOMMAND.0,
-    );
-    Ok(bar)
-}
-
 struct Desktop {
     state: Box<WindowState>,
     class: PCWSTR,
@@ -876,21 +1004,22 @@ struct Desktop {
 }
 impl Desktop {
     unsafe fn new(settings: Settings, path: PathBuf, class: PCWSTR, title: &str) -> Result<Self> {
-        let theme = Rc::new(Theme::new(GetDpiForSystem()));
+        let theme = Rc::new(Theme::new(GetDpiForSystem(), settings.appearance));
         let view = Rc::new(ViewState {
             page: Cell::new(Page::Triggers),
             diagnostic_tab: Cell::new(DiagnosticTab::Activity),
             listening: Cell::new(false),
+            live_debug: Cell::new(true),
+            level: Cell::new(0),
+            hover: Cell::new(0),
         });
         let (sender, receiver) = mpsc::channel();
-        let menu = menus()?;
         let state = Box::new(WindowState {
             events_pending: Cell::new(false),
             theme: theme.clone(),
             view: view.clone(),
             app: RefCell::new(App {
                 window: HWND(0),
-                menu,
                 settings,
                 path,
                 theme: theme.clone(),
@@ -910,29 +1039,28 @@ impl Desktop {
         let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
         InitCommonControlsEx(&INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_PROGRESS_CLASS,
+            dwICC: ICC_STANDARD_CLASSES,
         });
         let window_class = WNDCLASSW {
             lpfnWndProc: Some(procedure),
             hInstance: instance,
             lpszClassName: class,
             hCursor: LoadCursorW(None, IDC_ARROW).map_err(|e| e.to_string())?,
-            hIcon: LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
+            hIcon: theme.icon(true),
             ..Default::default()
         };
         if RegisterClassW(&window_class) == 0 {
-            DestroyMenu(menu);
             return Err(windows::core::Error::from_win32().to_string());
         }
         let mut outer = RECT {
-            right: theme.px(1100),
-            bottom: theme.px(740),
+            right: theme.px(layout::DEFAULT_WIDTH),
+            bottom: theme.px(layout::DEFAULT_HEIGHT),
             ..Default::default()
         };
         AdjustWindowRectExForDpi(
             &mut outer,
             WS_OVERLAPPEDWINDOW,
-            true,
+            false,
             WS_EX_CONTROLPARENT,
             theme.dpi.get(),
         );
@@ -963,12 +1091,11 @@ impl Desktop {
             width,
             height,
             None,
-            menu,
+            None,
             instance,
             Some(state.as_ref() as *const _ as *const _),
         );
         if window.0 == 0 {
-            DestroyMenu(menu);
             UnregisterClassW(class, instance);
             return Err(windows::core::Error::from_win32().to_string());
         }
@@ -976,6 +1103,18 @@ impl Desktop {
             let mut app = state.app.borrow_mut();
             app.window = window;
             app.events.window = window.0;
+            let dpi = GetDpiForWindow(window);
+            if dpi != 0 && dpi != theme.dpi.get() {
+                // Created on a monitor whose scale differs from the primary one.
+                let (fonts, icons) = theme.change_dpi(dpi);
+                for font in fonts {
+                    DeleteObject(font);
+                }
+                for icon in icons {
+                    DestroyIcon(icon);
+                }
+            }
+            app.set_icons();
             app.initialize();
         }
         Ok(Self {
@@ -1009,32 +1148,18 @@ impl Drop for AcceleratorTable {
     }
 }
 unsafe fn accelerators() -> Result<AcceleratorTable> {
+    let control = |key: u8, cmd: u16| ACCEL {
+        fVirt: FVIRTKEY | FCONTROL,
+        key: key as u16,
+        cmd,
+    };
     let handle = CreateAcceleratorTableW(&[
-        ACCEL {
-            fVirt: FVIRTKEY | FCONTROL,
-            key: b'S' as u16,
-            cmd: SAVE,
-        },
-        ACCEL {
-            fVirt: FVIRTKEY | FCONTROL,
-            key: b'1' as u16,
-            cmd: NAV_TRIGGERS,
-        },
-        ACCEL {
-            fVirt: FVIRTKEY | FCONTROL,
-            key: b'2' as u16,
-            cmd: NAV_SETTINGS,
-        },
-        ACCEL {
-            fVirt: FVIRTKEY | FCONTROL,
-            key: b'3' as u16,
-            cmd: NAV_DIAGNOSTICS,
-        },
-        ACCEL {
-            fVirt: FVIRTKEY | FCONTROL,
-            key: b'4' as u16,
-            cmd: NAV_CREDITS,
-        },
+        control(b'S', SAVE),
+        control(b'Q', EXIT),
+        control(b'1', NAV_TRIGGERS),
+        control(b'2', NAV_SETTINGS),
+        control(b'3', NAV_DIAGNOSTICS),
+        control(b'4', NAV_CREDITS),
         ACCEL {
             fVirt: FVIRTKEY,
             key: 0x70,

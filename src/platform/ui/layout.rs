@@ -1,25 +1,331 @@
 use super::*;
-use windows::Win32::UI::Controls::{SetWindowTheme, PBM_SETBARCOLOR, PBM_SETBKCOLOR};
 
-pub(super) fn cards(
-    page: Page,
-    tab: DiagnosticTab,
-    width: i32,
-    height: i32,
-) -> Vec<(i32, i32, i32, i32)> {
-    let w = width - 272;
-    let h = height - 256;
-    let list = (w * 30 / 100).clamp(210, 280);
-    match page {
-        Page::Triggers => vec![(240, 128, list, h), (260 + list, 128, w - list - 20, h)],
-        Page::Settings => vec![(240, 128, w, 180), (240, 328, w, h - 200)],
-        Page::Diagnostics if tab == DiagnosticTab::Activity => {
-            vec![(240, 180, w, 128), (240, 328, w, h - 200)]
-        }
-        Page::Diagnostics => vec![(240, 180, w, h - 52)],
-        Page::Credits => vec![(240, 128, 260, h), (520, 128, w - 280, h)],
+/// A rectangle in logical (96 DPI) pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rect {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Self { x, y, w, h }
+    }
+    pub fn right(self) -> i32 {
+        self.x + self.w
+    }
+    pub fn bottom(self) -> i32 {
+        self.y + self.h
+    }
+    #[cfg(test)]
+    pub fn contains(self, other: Rect) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.right() <= self.right()
+            && other.bottom() <= self.bottom()
+    }
+    #[cfg(test)]
+    pub fn overlaps(self, other: Rect) -> bool {
+        self.x < other.right()
+            && other.x < self.right()
+            && self.y < other.bottom()
+            && other.y < self.bottom()
     }
 }
+
+pub(super) const MIN_WIDTH: i32 = 960;
+pub(super) const MIN_HEIGHT: i32 = 600;
+pub(super) const DEFAULT_WIDTH: i32 = 1100;
+pub(super) const DEFAULT_HEIGHT: i32 = 740;
+pub(super) const SIDEBAR: i32 = 232;
+pub(super) const ROW_HEIGHT: i32 = 56;
+pub(super) const OPTION_HEIGHT: i32 = 32;
+pub(super) const FIELD: i32 = 36;
+pub(super) const BRAND_ICON: Rect = Rect::new(20, 22, 32, 32);
+const LEFT: i32 = 256;
+const MARGIN: i32 = 32;
+const TOP: i32 = 100;
+const FOOTER: i32 = 72;
+const GAP: i32 = 16;
+const PAD: i32 = 20;
+const SETTING_ROW: i32 = 68;
+
+/// One placement plan per page, shared by control positioning and painting so
+/// that cards, frames and controls cannot drift apart.
+#[derive(Default)]
+pub(super) struct Plan {
+    pub cards: Vec<Rect>,
+    pub tracks: Vec<Rect>,
+    pub dividers: Vec<Rect>,
+    pub items: Vec<(u16, Rect)>,
+}
+
+impl Plan {
+    fn add(&mut self, id: u16, rect: Rect) {
+        self.items.push((id, rect));
+    }
+    pub fn get(&self, id: u16) -> Option<Rect> {
+        self.items
+            .iter()
+            .find(|(item, _)| *item == id)
+            .map(|(_, rect)| *rect)
+    }
+    fn header(&mut self, title: u16, card: Rect, reserved: i32) {
+        self.add(
+            title,
+            Rect::new(
+                card.x + PAD,
+                card.y + 16,
+                card.w - 2 * PAD - reserved,
+                FIELD,
+            ),
+        );
+    }
+    fn segments(&mut self, track: Rect, ids: &[(u16, i32)]) {
+        self.tracks.push(track);
+        let mut x = track.x + 3;
+        for (id, width) in ids {
+            self.add(*id, Rect::new(x, track.y + 3, *width, track.h - 6));
+            x += width;
+        }
+    }
+}
+
+/// Status dot beside the listening label in the sidebar.
+pub(super) fn status_dot(height: i32) -> Rect {
+    Rect::new(24, height - 82, 8, 8)
+}
+
+pub(super) fn plan(
+    page: Page,
+    tab: DiagnosticTab,
+    listening: bool,
+    width: i32,
+    height: i32,
+) -> Plan {
+    let mut plan = Plan::default();
+    let inner = SIDEBAR - 24;
+    plan.add(BRAND, Rect::new(62, 18, SIDEBAR - 74, 22));
+    plan.add(VERSION, Rect::new(62, 40, SIDEBAR - 74, 18));
+    for (index, id) in [NAV_TRIGGERS, NAV_SETTINGS, NAV_DIAGNOSTICS, NAV_CREDITS]
+        .into_iter()
+        .enumerate()
+    {
+        plan.add(id, Rect::new(12, 84 + index as i32 * 44, inner, 40));
+    }
+    let footer = height - FOOTER;
+    let row = footer + 18;
+    plan.add(MODE, Rect::new(40, row - 34, SIDEBAR - 52, 20));
+    plan.add(
+        if listening { STOP } else { START },
+        Rect::new(12, row, inner, FIELD),
+    );
+
+    let width = width - LEFT - MARGIN;
+    plan.add(PAGE_TITLE, Rect::new(LEFT, 20, width, 36));
+    plan.add(PAGE_HINT, Rect::new(LEFT, 58, width, 22));
+    plan.dividers.push(Rect::new(LEFT, footer, width, 1));
+    let hide = Rect::new(LEFT + width - 128, row, 128, FIELD);
+    let save = Rect::new(hide.x - 8 - 164, row, 164, FIELD);
+    plan.add(SAVE, save);
+    plan.add(HIDE, hide);
+    plan.add(STATUS, Rect::new(LEFT, row, save.x - LEFT - 24, FIELD));
+
+    let content = Rect::new(LEFT, TOP, width, footer - 20 - TOP);
+    match page {
+        Page::Triggers => triggers(&mut plan, content),
+        Page::Settings => settings(&mut plan, content),
+        Page::Diagnostics => diagnostics(&mut plan, content, tab),
+        Page::Credits => credits(&mut plan, content),
+    }
+    plan
+}
+
+fn triggers(plan: &mut Plan, content: Rect) {
+    let list_width = (content.w * 34 / 100).clamp(232, 340);
+    let list = Rect::new(content.x, content.y, list_width, content.h);
+    let editor = Rect::new(
+        list.right() + GAP,
+        content.y,
+        content.w - list_width - GAP,
+        content.h,
+    );
+    plan.cards.extend([list, editor]);
+    plan.header(LIST_TITLE, list, 0);
+    plan.add(
+        LIST,
+        Rect::new(list.x + 8, list.y + 60, list.w - 16, list.h - 68),
+    );
+    plan.header(EDITOR_TITLE, editor, 0);
+    let (x, w, y) = (editor.x + PAD, editor.w - 2 * PAD, editor.y);
+    for (index, (label, field)) in [
+        (PHRASE_LABEL, PHRASE),
+        (ACTION_LABEL, ACTION),
+        (TARGET_LABEL, TARGET),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let top = y + 64 + index as i32 * 76;
+        plan.add(label, Rect::new(x, top, w, 20));
+        plan.add(field, Rect::new(x, top + 24, w, FIELD));
+    }
+    plan.add(TARGET_HINT, Rect::new(x, y + 284, w, 32));
+    // Actions follow the fields they apply to rather than the card bottom.
+    let buttons = y + 336;
+    plan.add(APPLY, Rect::new(x, buttons, 136, FIELD));
+    plan.add(ADD, Rect::new(x + 144, buttons, 120, FIELD));
+    plan.add(
+        DELETE,
+        Rect::new(editor.right() - PAD - 104, buttons, 104, FIELD),
+    );
+}
+
+/// Label, description, optional control (None: theme switch) and control width.
+type SettingRow = (u16, u16, Option<u16>, i32);
+
+fn settings(plan: &mut Plan, content: Rect) {
+    let path_width = (content.w * 45 / 100).clamp(280, 520);
+    let sections: [(u16, &[SettingRow]); 3] = [
+        (APPEARANCE_TITLE, &[(THEME_LABEL, THEME_HINT, None, 200)]),
+        (
+            RECOGNITION_TITLE,
+            &[
+                (LANGUAGE_LABEL, LANGUAGE_HINT, Some(LANGUAGE), 260),
+                (THRESHOLD_LABEL, THRESHOLD_HINT, Some(THRESHOLD), 140),
+            ],
+        ),
+        (
+            CHATGPT_TITLE,
+            &[(PATH_LABEL, PATH_HINT, Some(CHAT_PATH), path_width)],
+        ),
+    ];
+    let mut y = content.y;
+    for (title, rows) in sections {
+        plan.add(title, Rect::new(content.x, y, content.w, 20));
+        let card = Rect::new(
+            content.x,
+            y + 28,
+            content.w,
+            rows.len() as i32 * SETTING_ROW,
+        );
+        plan.cards.push(card);
+        for (index, (label, hint, control, control_width)) in rows.iter().enumerate() {
+            let top = card.y + index as i32 * SETTING_ROW;
+            if index > 0 {
+                plan.dividers
+                    .push(Rect::new(card.x + PAD, top, card.w - 2 * PAD, 1));
+            }
+            let text = card.w - 2 * PAD - control_width - 24;
+            plan.add(*label, Rect::new(card.x + PAD, top + 12, text, 20));
+            plan.add(*hint, Rect::new(card.x + PAD, top + 34, text, 32));
+            let field = Rect::new(
+                card.right() - PAD - control_width,
+                top + 16,
+                *control_width,
+                FIELD,
+            );
+            match control {
+                Some(id) => plan.add(*id, field),
+                None => plan.segments(field, &[(THEME_LIGHT, 97), (THEME_DARK, 97)]),
+            }
+        }
+        y = card.bottom() + GAP;
+    }
+}
+
+fn diagnostics(plan: &mut Plan, content: Rect, tab: DiagnosticTab) {
+    plan.segments(
+        Rect::new(content.x, content.y, 260, FIELD),
+        &[(ACTIVITY_TAB, 120), (CHECKS_TAB, 134)],
+    );
+    let body = Rect::new(content.x, content.y + 52, content.w, content.h - 52);
+    let (x, w) = (body.x + PAD, body.w - 2 * PAD);
+    if tab == DiagnosticTab::Activity {
+        let microphone = Rect::new(body.x, body.y, body.w, 112);
+        let log = Rect::new(
+            body.x,
+            microphone.bottom() + GAP,
+            body.w,
+            body.bottom() - microphone.bottom() - GAP,
+        );
+        plan.cards.extend([microphone, log]);
+        plan.header(INPUT_TITLE, microphone, 168);
+        plan.add(
+            DEBUG,
+            Rect::new(
+                microphone.right() - PAD - 148,
+                microphone.y + 16,
+                148,
+                FIELD,
+            ),
+        );
+        plan.add(LEVEL, Rect::new(x, microphone.y + 58, w, 20));
+        plan.add(METER, Rect::new(x, microphone.y + 86, w, 8));
+        plan.header(LOG_TITLE, log, 120);
+        plan.add(
+            CLEAR_LOG,
+            Rect::new(log.right() - PAD - 104, log.y + 16, 104, FIELD),
+        );
+        plan.add(LOG, Rect::new(x, log.y + 64, w, log.h - 64 - PAD));
+    } else {
+        plan.cards.push(body);
+        plan.header(CHECKS_TITLE, body, 140);
+        plan.add(
+            DIAGNOSTIC,
+            Rect::new(body.right() - PAD - 124, body.y + 16, 124, FIELD),
+        );
+        plan.add(CHECKS_HINT, Rect::new(x, body.y + 56, w, 20));
+        plan.add(REPORT, Rect::new(x, body.y + 88, w, body.h - 88 - PAD));
+    }
+}
+
+fn credits(plan: &mut Plan, content: Rect) {
+    let about_width = (content.w * 36 / 100).clamp(256, 340);
+    let about = Rect::new(content.x, content.y, about_width, content.h);
+    let license = Rect::new(
+        about.right() + GAP,
+        content.y,
+        content.w - about_width - GAP,
+        content.h,
+    );
+    plan.cards.extend([about, license]);
+    let (x, w, y) = (about.x + PAD, about.w - 2 * PAD, about.y);
+    plan.add(CREDIT_NAME, Rect::new(x, y + 16, w, FIELD));
+    plan.add(CREDIT_VERSION, Rect::new(x, y + 54, w, 20));
+    plan.add(CREDIT_OWNER, Rect::new(x, y + 78, w, 40));
+    plan.add(REPOSITORY, Rect::new(x, y + 130, w, FIELD));
+    plan.add(DOCUMENTATION, Rect::new(x, y + 174, w, FIELD));
+    plan.dividers.push(Rect::new(x, y + 228, w, 1));
+    plan.add(CREDIT_BUILT, Rect::new(x, y + 244, w, 20));
+    plan.add(CREDIT_LIBRARIES, Rect::new(x, y + 270, w, 84));
+    plan.header(LICENSE_TITLE, license, 0);
+    plan.add(
+        LICENSE_TEXT,
+        Rect::new(
+            license.x + PAD,
+            license.y + 64,
+            license.w - 2 * PAD,
+            license.h - 64 - PAD,
+        ),
+    );
+}
+
+/// Joins hard-wrapped license lines so the text flows with the panel width.
+pub(super) fn reflow(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .split("\n\n")
+        .map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join("\r\n\r\n")
+}
+
+const SINGLE_LINE: WINDOW_STYLE = WINDOW_STYLE(0x200 | 0x80 | 0x4000); // SS_CENTERIMAGE | SS_NOPREFIX | SS_ENDELLIPSIS
+const WRAPPED: WINDOW_STYLE = WINDOW_STYLE(0x80); // SS_LEFT | SS_NOPREFIX
+const OWNER_DRAWN_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x0d); // SS_OWNERDRAW
 
 impl App {
     unsafe fn control(
@@ -28,7 +334,6 @@ impl App {
         class: PCWSTR,
         text: &str,
         style: WINDOW_STYLE,
-        scope: Scope,
         font: Font,
     ) -> HWND {
         let handle = CreateWindowExW(
@@ -51,64 +356,86 @@ impl App {
             WPARAM(self.theme.font(font).0 as usize),
             LPARAM(0),
         );
-        let _ = SetWindowTheme(handle, w!("Explorer"), PCWSTR::null());
-        self.controls.push(Control {
-            id,
-            handle,
-            scope,
-            font,
-        });
+        self.controls.push(Control { id, handle, font });
         handle
     }
 
-    unsafe fn label(&mut self, id: u16, text: &str, scope: Scope, font: Font) {
-        self.control(id, w!("STATIC"), text, WINDOW_STYLE(0), scope, font);
+    unsafe fn label(&mut self, id: u16, text: &str, font: Font) {
+        self.control(id, w!("STATIC"), text, SINGLE_LINE, font);
     }
 
-    unsafe fn edit(&mut self, id: u16, text: &str, scope: Scope, multiline: bool) {
-        let style = if multiline {
-            WS_VSCROLL
-                | WINDOW_STYLE(ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32)
-        } else {
-            WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32)
-        };
+    unsafe fn paragraph(&mut self, id: u16, text: &str, font: Font) {
+        self.control(id, w!("STATIC"), text, WRAPPED, font);
+    }
+
+    unsafe fn input(&mut self, id: u16, text: &str) {
         self.control(
             id,
             w!("EDIT"),
             text,
-            WS_TABSTOP | style,
-            scope,
-            if multiline { Font::Mono } else { Font::Body },
-        );
-    }
-
-    unsafe fn button(&mut self, id: u16, text: &str, scope: Scope) {
-        self.control(
-            id,
-            w!("BUTTON"),
-            text,
-            WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32),
-            scope,
+            WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
             Font::Body,
         );
     }
 
+    unsafe fn well(&mut self, id: u16, text: &str) {
+        self.control(
+            id,
+            w!("EDIT"),
+            text,
+            WS_TABSTOP
+                | WS_VSCROLL
+                | WINDOW_STYLE(ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32),
+            Font::Mono,
+        );
+    }
+
+    unsafe fn button(&mut self, id: u16, text: &str) {
+        let handle = self.control(
+            id,
+            w!("BUTTON"),
+            text,
+            WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32),
+            Font::Body,
+        );
+        SetWindowSubclass(handle, Some(super::subclass), 1, 0);
+    }
+
+    unsafe fn select(&mut self, id: u16, options: &[&str], selected: usize) {
+        let handle = self.control(
+            id,
+            w!("COMBOBOX"),
+            "",
+            WS_TABSTOP
+                | WS_VSCROLL
+                | WINDOW_STYLE(
+                    CBS_DROPDOWNLIST as u32 | CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32,
+                ),
+            Font::Body,
+        );
+        for option in options {
+            SendMessageW(
+                handle,
+                CB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(wide(option).as_ptr() as isize),
+            );
+        }
+        SendMessageW(handle, CB_SETCURSEL, WPARAM(selected), LPARAM(0));
+        SetWindowSubclass(handle, Some(super::subclass), 1, 1);
+    }
+
     pub(super) unsafe fn initialize(&mut self) {
-        use Scope::*;
-        self.label(BRAND, "VoiceTrigger", Global, Font::Brand);
-        self.label(BRAND_HINT, "Local voice automation", Global, Font::Small);
+        self.label(BRAND, "VoiceTrigger", Font::Brand);
         self.label(
             VERSION,
             concat!("Version ", env!("CARGO_PKG_VERSION")),
-            Global,
             Font::Small,
         );
-        self.label(MODE, "Not listening", Global, Font::Small);
-        self.label(PAGE_TITLE, "Triggers", Global, Font::Heading);
+        self.label(PAGE_TITLE, "Triggers", Font::Heading);
         self.label(
             PAGE_HINT,
             "Choose a phrase and the action it runs.",
-            Global,
             Font::Body,
         );
         for (id, text) in [
@@ -117,25 +444,10 @@ impl App {
             (NAV_DIAGNOSTICS, "Diagnostics"),
             (NAV_CREDITS, "Credits"),
         ] {
-            self.button(id, text, Global);
-        }
-        self.label(
-            STATUS,
-            "Ready. Start listening to enable your voice triggers.",
-            Global,
-            Font::Small,
-        );
-        for (id, text) in [
-            (SAVE, "Save configuration"),
-            (HIDE, "Hide to tray"),
-            (STOP, "Stop"),
-            (START, "Start listening"),
-        ] {
-            self.button(id, text, Global);
+            self.button(id, text);
         }
 
-        let triggers = Section(Page::Triggers);
-        self.label(LIST_TITLE, "Configured triggers", triggers, Font::Label);
+        self.label(LIST_TITLE, "Configured triggers", Font::Label);
         self.control(
             LIST,
             w!("LISTBOX"),
@@ -148,40 +460,27 @@ impl App {
                         | LBS_OWNERDRAWFIXED as u32
                         | LBS_HASSTRINGS as u32,
                 ),
-            triggers,
             Font::Body,
         );
-        self.label(EDITOR_TITLE, "Trigger details", triggers, Font::Label);
-        self.label(PHRASE_LABEL, "Spoken phrase", triggers, Font::Body);
-        self.edit(PHRASE, "", triggers, false);
-        self.label(ACTION_LABEL, "Action", triggers, Font::Body);
-        self.control(
+        self.label(EDITOR_TITLE, "Trigger details", Font::Label);
+        self.label(PHRASE_LABEL, "Spoken phrase", Font::Body);
+        self.input(PHRASE, "");
+        self.label(ACTION_LABEL, "Action", Font::Body);
+        self.select(
             ACTION,
-            w!("COMBOBOX"),
-            "",
-            WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-            triggers,
-            Font::Body,
+            &[
+                "Dictate to ChatGPT",
+                "Open ChatGPT",
+                "Open a website",
+                "Launch an application",
+            ],
+            0,
         );
-        for text in [
-            "Dictate to ChatGPT",
-            "Open ChatGPT",
-            "Open a website",
-            "Launch an application",
-        ] {
-            SendMessageW(
-                self.child(ACTION),
-                CB_ADDSTRING,
-                WPARAM(0),
-                LPARAM(wide(text).as_ptr() as isize),
-            );
-        }
-        self.label(TARGET_LABEL, "Target", triggers, Font::Body);
-        self.edit(TARGET, "", triggers, false);
-        self.label(
+        self.label(TARGET_LABEL, "Target", Font::Body);
+        self.input(TARGET, "");
+        self.paragraph(
             TARGET_HINT,
             "Used for a website address or an executable path.",
-            triggers,
             Font::Small,
         );
         for (id, text) in [
@@ -189,279 +488,218 @@ impl App {
             (ADD, "Add as new"),
             (DELETE, "Remove"),
         ] {
-            self.button(id, text, triggers);
+            self.button(id, text);
         }
 
-        let settings = Section(Page::Settings);
-        self.label(RECOGNITION_TITLE, "Recognition", settings, Font::Label);
-        self.label(LANGUAGE_LABEL, "Recognition language", settings, Font::Body);
-        self.control(
-            LANGUAGE,
-            w!("COMBOBOX"),
-            "",
-            WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-            settings,
-            Font::Body,
+        self.label(APPEARANCE_TITLE, "Appearance", Font::Label);
+        self.label(THEME_LABEL, "Theme", Font::Body);
+        self.paragraph(
+            THEME_HINT,
+            "Applies to the whole window and is saved immediately.",
+            Font::Small,
         );
-        for text in ["French (France)", "English (United States)"] {
-            SendMessageW(
-                self.child(LANGUAGE),
-                CB_ADDSTRING,
-                WPARAM(0),
-                LPARAM(wide(text).as_ptr() as isize),
-            );
-        }
-        SendMessageW(
-            self.child(LANGUAGE),
-            CB_SETCURSEL,
-            WPARAM(usize::from(self.settings.language == 0x0409)),
-            LPARAM(0),
-        );
-        self.label(
+        self.button(THEME_LIGHT, "Light");
+        self.button(THEME_DARK, "Dark");
+        self.label(RECOGNITION_TITLE, "Recognition", Font::Label);
+        self.label(LANGUAGE_LABEL, "Recognition language", Font::Body);
+        self.paragraph(
             LANGUAGE_HINT,
-            "Uses an installed Windows SAPI engine.",
-            settings,
+            "Uses an installed Windows SAPI recognizer.",
             Font::Small,
         );
-        self.label(THRESHOLD_LABEL, "Silence threshold", settings, Font::Body);
-        self.edit(
-            THRESHOLD,
-            &self.settings.voice_threshold.to_string(),
-            settings,
-            false,
+        self.select(
+            LANGUAGE,
+            &["French (France)", "English (United States)"],
+            usize::from(self.settings.language == 0x0409),
         );
-        self.label(
+        self.label(THRESHOLD_LABEL, "Silence threshold", Font::Body);
+        self.paragraph(
             THRESHOLD_HINT,
-            "0.001 to 0.5. Default: 0.015.",
-            settings,
+            "Speech level for the 3-second silence that submits dictation. 0.001 to 0.5; default 0.015.",
             Font::Small,
         );
-        self.label(CHATGPT_TITLE, "ChatGPT", settings, Font::Label);
-        self.label(
-            PATH_LABEL,
-            "Executable path (optional)",
-            settings,
-            Font::Body,
-        );
-        self.edit(
-            CHAT_PATH,
-            &self.settings.chatgpt_path.clone(),
-            settings,
-            false,
-        );
-        self.label(
+        self.input(THRESHOLD, &self.settings.voice_threshold.to_string());
+        self.label(CHATGPT_TITLE, "ChatGPT", Font::Label);
+        self.label(PATH_LABEL, "Executable path", Font::Body);
+        self.paragraph(
             PATH_HINT,
-            "Leave blank to use the installed app. Dictation submits after 3 seconds of silence.",
-            settings,
+            "Optional. Leave blank to use the installed app.",
             Font::Small,
         );
+        self.input(CHAT_PATH, &self.settings.chatgpt_path.clone());
 
-        self.button(ACTIVITY_TAB, "Activity", Section(Page::Diagnostics));
-        self.button(CHECKS_TAB, "System checks", Section(Page::Diagnostics));
-        let activity = Diagnostic(DiagnosticTab::Activity);
-        self.label(INPUT_TITLE, "Microphone", activity, Font::Label);
-        self.label(LEVEL, "Microphone: stopped", activity, Font::Body);
-        self.control(
-            DEBUG,
-            w!("BUTTON"),
-            "Live debug",
-            WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-            activity,
-            Font::Body,
-        );
-        SendMessageW(
-            self.child(DEBUG),
-            BM_SETCHECK,
-            WPARAM(BST_CHECKED.0 as usize),
-            LPARAM(0),
-        );
+        self.button(ACTIVITY_TAB, "Activity");
+        self.button(CHECKS_TAB, "System checks");
+        self.label(INPUT_TITLE, "Microphone", Font::Label);
+        self.button(DEBUG, "Live debug");
+        self.label(LEVEL, "Microphone: stopped", Font::Body);
         self.control(
             METER,
-            w!("msctls_progress32"),
+            w!("STATIC"),
             "Microphone level",
-            WINDOW_STYLE(0),
-            activity,
-            Font::Body,
+            OWNER_DRAWN_STATIC,
+            Font::Small,
         );
-        let _ = SetWindowTheme(self.child(METER), w!(""), w!(""));
-        SendMessageW(self.child(METER), PBM_SETRANGE32, WPARAM(0), LPARAM(100));
-        SendMessageW(
-            self.child(METER),
-            PBM_SETBARCOLOR,
-            WPARAM(0),
-            LPARAM(0x677011),
-        );
-        SendMessageW(
-            self.child(METER),
-            PBM_SETBKCOLOR,
-            WPARAM(0),
-            LPARAM(0xf0e9e4),
-        );
-        self.label(LOG_TITLE, "Event log", activity, Font::Label);
-        self.button(CLEAR_LOG, "Clear log", activity);
-        self.edit(LOG, "", activity, true);
-        let checks = Diagnostic(DiagnosticTab::Checks);
-        self.label(CHECKS_TITLE, "System checks", checks, Font::Label);
+        self.label(LOG_TITLE, "Event log", Font::Label);
+        self.button(CLEAR_LOG, "Clear log");
+        self.well(LOG, "");
+        self.label(CHECKS_TITLE, "System checks", Font::Label);
         self.label(
             CHECKS_HINT,
             "Check installed recognition engines and accessible ChatGPT controls.",
-            checks,
             Font::Small,
         );
-        self.button(DIAGNOSTIC, "Run checks", checks);
-        self.edit(
+        self.button(DIAGNOSTIC, "Run checks");
+        self.well(
             REPORT,
             "Run checks to inspect the recognition engine and ChatGPT connection.",
-            checks,
-            true,
         );
 
-        let credits = Section(Page::Credits);
-        self.label(CREDIT_NAME, "VoiceTrigger", credits, Font::Brand);
+        self.label(CREDIT_NAME, "VoiceTrigger", Font::Brand);
         self.label(
             CREDIT_VERSION,
             concat!("Version ", env!("CARGO_PKG_VERSION")),
-            credits,
             Font::Body,
         );
-        self.label(
+        self.paragraph(
             CREDIT_OWNER,
             "Created by TheGeogeo\r\nCopyright 2026 TheGeogeo",
-            credits,
             Font::Body,
         );
-        self.button(REPOSITORY, "Source code", credits);
-        self.button(DOCUMENTATION, "Documentation", credits);
-        self.label(CREDIT_BUILT, "Built with", credits, Font::Label);
-        self.label(CREDIT_LIBRARIES, "Rust\r\nwindows-rs 0.48.0\r\nSerde 1.0.188\r\nserde_json 1.0.105\r\nLibraries: MIT or Apache 2.0", credits, Font::Small);
-        self.label(LICENSE_TITLE, "MIT license", credits, Font::Label);
-        self.edit(
-            LICENSE_TEXT,
-            &include_str!("../../../LICENSE")
-                .replace("\r\n", "\n")
-                .replace('\n', "\r\n"),
-            credits,
-            true,
+        self.button(REPOSITORY, "Source code");
+        self.button(DOCUMENTATION, "Documentation");
+        self.label(CREDIT_BUILT, "Built with", Font::Label);
+        self.paragraph(
+            CREDIT_LIBRARIES,
+            "Rust\r\nwindows-rs 0.48.0\r\nSerde 1.0.188\r\nserde_json 1.0.105\r\nLibraries: MIT or Apache 2.0",
+            Font::Small,
         );
+        self.label(LICENSE_TITLE, "MIT license", Font::Label);
+        self.well(LICENSE_TEXT, &reflow(include_str!("../../../LICENSE")));
+
+        self.control(
+            STATUS,
+            w!("STATIC"),
+            "Ready. Start listening to enable your voice triggers.",
+            OWNER_DRAWN_STATIC,
+            Font::Small,
+        );
+        self.button(SAVE, "Save configuration");
+        self.button(HIDE, "Hide to tray");
+        self.label(MODE, "Not listening", Font::Small);
+        self.button(START, "Start listening");
+        self.button(STOP, "Stop listening");
+
         self.append_log("Ready. Trigger and action events are kept in memory only.");
+        self.size_lists();
         self.refresh_list(Some(0));
         self.initialized = true;
+        self.apply_theme();
         self.update_controls(false);
-        self.layout();
     }
 
-    unsafe fn place(&self, id: u16, x: i32, y: i32, width: i32, height: i32) {
-        SetWindowPos(
-            self.child(id),
-            None,
-            self.theme.px(x),
-            self.theme.px(y),
-            self.theme.px(width.max(1)),
-            self.theme.px(height.max(1)),
-            SWP_NOZORDER | SWP_NOACTIVATE,
+    /// Sets owner-drawn row heights and makes closed selects match text fields.
+    pub(super) unsafe fn size_lists(&self) {
+        SendMessageW(
+            self.child(LIST),
+            LB_SETITEMHEIGHT,
+            WPARAM(0),
+            LPARAM(self.theme.px(ROW_HEIGHT) as isize),
         );
+        let target = self.theme.px(FIELD);
+        for id in [ACTION, LANGUAGE] {
+            let select = self.child(id);
+            SendMessageW(
+                select,
+                CB_SETITEMHEIGHT,
+                WPARAM(0),
+                LPARAM(self.theme.px(OPTION_HEIGHT) as isize),
+            );
+            let mut field = target - 6;
+            for _ in 0..2 {
+                SendMessageW(
+                    select,
+                    CB_SETITEMHEIGHT,
+                    WPARAM(usize::MAX),
+                    LPARAM(field as isize),
+                );
+                let mut rect = RECT::default();
+                GetWindowRect(select, &mut rect);
+                let actual = rect.bottom - rect.top;
+                if actual == target || actual <= 0 {
+                    break;
+                }
+                field += target - actual;
+            }
+        }
+    }
+
+    pub(super) unsafe fn logical_size(&self) -> (i32, i32) {
+        let mut rect = RECT::default();
+        GetClientRect(self.window, &mut rect);
+        let dpi = self.theme.dpi.get() as i32;
+        (rect.right * 96 / dpi, rect.bottom * 96 / dpi)
     }
 
     pub(super) unsafe fn layout(&self) {
         if !self.initialized {
             return;
         }
-        let mut rect = RECT::default();
-        GetClientRect(self.window, &mut rect);
-        let width = rect.right * 96 / self.theme.dpi.get() as i32;
-        let height = rect.bottom * 96 / self.theme.dpi.get() as i32;
-        let w = width - 272;
-        let h = height - 256;
-        self.place(BRAND, 70, 37, 128, 26);
-        self.place(BRAND_HINT, 25, 87, 174, 20);
-        self.place(MODE, 43, height - 96, 156, 22);
-        self.place(VERSION, 25, height - 48, 174, 20);
-        for (index, id) in [NAV_TRIGGERS, NAV_SETTINGS, NAV_DIAGNOSTICS, NAV_CREDITS]
-            .iter()
-            .enumerate()
-        {
-            self.place(*id, 16, 140 + index as i32 * 50, 176, 44);
+        let (width, height) = self.logical_size();
+        let plan = plan(
+            self.view.page.get(),
+            self.view.diagnostic_tab.get(),
+            self.view.listening.get(),
+            width,
+            height,
+        );
+        let line = self.theme.line_height(Font::Body);
+        for control in &self.controls {
+            let Some(frame) = plan.get(control.id) else {
+                // A hidden control receives no mouse-leave; clear its hover state.
+                if self.view.hover.get() == control.handle.0 {
+                    self.view.hover.set(0);
+                }
+                ShowWindow(control.handle, SW_HIDE);
+                continue;
+            };
+            let mut rect = self.theme.rect(frame);
+            match control.id {
+                PHRASE | TARGET | THRESHOLD | CHAT_PATH => {
+                    rect.left += self.theme.px(12);
+                    rect.right -= self.theme.px(12);
+                    rect.top += (rect.bottom - rect.top - line) / 2;
+                    rect.bottom = rect.top + line;
+                }
+                LOG | REPORT | LICENSE_TEXT => {
+                    rect.left += self.theme.px(12);
+                    rect.right -= self.theme.px(4);
+                    rect.top += self.theme.px(8);
+                    rect.bottom -= self.theme.px(8);
+                }
+                ACTION | LANGUAGE => {
+                    rect.bottom += self.theme.px(4 * OPTION_HEIGHT + 8);
+                }
+                _ => {}
+            }
+            SetWindowPos(
+                control.handle,
+                None,
+                rect.left,
+                rect.top,
+                (rect.right - rect.left).max(1),
+                (rect.bottom - rect.top).max(1),
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            ShowWindow(control.handle, SW_SHOWNA);
         }
-        self.place(PAGE_TITLE, 240, 36, w, 38);
-        self.place(PAGE_HINT, 240, 82, w, 24);
-        self.place(STATUS, 240, height - 106, w, 38);
-        self.place(SAVE, 240, height - 56, 154, 38);
-        self.place(HIDE, 406, height - 56, 114, 38);
-        self.place(STOP, width - 288, height - 56, 84, 38);
-        self.place(START, width - 192, height - 56, 160, 38);
-
-        let list = (w * 30 / 100).clamp(210, 280);
-        let editor = 260 + list;
-        let inner = w - list - 68;
-        self.place(LIST_TITLE, 260, 152, list - 40, 24);
-        self.place(LIST, 248, 188, list - 16, h - 72);
-        self.place(EDITOR_TITLE, editor + 24, 152, inner, 24);
-        for (id, y) in [
-            (PHRASE_LABEL, 194),
-            (ACTION_LABEL, 270),
-            (TARGET_LABEL, 346),
-        ] {
-            self.place(id, editor + 24, y, inner, 22);
-        }
-        self.place(PHRASE, editor + 24, 220, inner, 34);
-        self.place(ACTION, editor + 24, 296, inner, 180);
-        self.place(TARGET, editor + 24, 372, inner, 34);
-        self.place(TARGET_HINT, editor + 24, 418, inner, 34);
-        self.place(APPLY, editor + 24, height - 184, 126, 36);
-        self.place(ADD, editor + 160, height - 184, 108, 36);
-        self.place(DELETE, editor + 278, height - 184, 82, 36);
-
-        let col = (w - 72) / 2;
-        self.place(RECOGNITION_TITLE, 264, 150, w - 48, 24);
-        for (id, x) in [(LANGUAGE_LABEL, 264), (THRESHOLD_LABEL, 288 + col)] {
-            self.place(id, x, 194, col, 22);
-        }
-        self.place(LANGUAGE, 264, 222, col, 160);
-        self.place(THRESHOLD, 288 + col, 222, col, 32);
-        self.place(LANGUAGE_HINT, 264, 270, col, 26);
-        self.place(THRESHOLD_HINT, 288 + col, 270, col, 26);
-        self.place(CHATGPT_TITLE, 264, 350, w - 48, 24);
-        self.place(PATH_LABEL, 264, 390, w - 48, 22);
-        self.place(CHAT_PATH, 264, 418, w - 48, 34);
-        self.place(PATH_HINT, 264, 466, w - 48, 34);
-
-        self.place(ACTIVITY_TAB, 240, 128, 104, 36);
-        self.place(CHECKS_TAB, 356, 128, 140, 36);
-        self.place(INPUT_TITLE, 264, 202, w - 48, 24);
-        self.place(LEVEL, 264, 245, w - 220, 24);
-        self.place(DEBUG, width - 188, 242, 132, 28);
-        self.place(METER, 264, 286, w - 48, 8);
-        self.place(LOG_TITLE, 264, 350, w - 200, 24);
-        self.place(CLEAR_LOG, width - 156, 342, 100, 36);
-        self.place(LOG, 264, 390, w - 48, height - 542);
-        self.place(CHECKS_TITLE, 264, 204, w - 220, 24);
-        self.place(CHECKS_HINT, 264, 242, w - 48, 24);
-        self.place(DIAGNOSTIC, width - 180, 198, 124, 36);
-        self.place(REPORT, 264, 286, w - 48, height - 438);
-
-        self.place(CREDIT_NAME, 264, 152, 212, 28);
-        self.place(CREDIT_VERSION, 264, 192, 212, 24);
-        self.place(CREDIT_OWNER, 264, 218, 212, 44);
-        self.place(REPOSITORY, 264, 276, 212, 34);
-        self.place(DOCUMENTATION, 264, 322, 212, 34);
-        self.place(CREDIT_BUILT, 264, 378, 212, 24);
-        self.place(CREDIT_LIBRARIES, 264, 412, 212, 88);
-        self.place(LICENSE_TITLE, 544, 152, w - 328, 24);
-        self.place(LICENSE_TEXT, 544, 198, w - 328, height - 350);
         // Keep scrollable text aligned to complete font lines at every size.
         for id in [LOG, REPORT, LICENSE_TEXT] {
             let child = self.child(id);
-            let dc = GetDC(child);
-            let old_font = SelectObject(dc, self.theme.font(Font::Mono));
-            let mut metrics = TEXTMETRICW::default();
-            GetTextMetricsW(dc, &mut metrics);
-            SelectObject(dc, old_font);
-            ReleaseDC(child, dc);
+            let line_height = self.theme.line_height(Font::Mono).max(1);
             let mut text_rect = RECT::default();
             GetClientRect(child, &mut text_rect);
-            let padding = self.theme.px(2);
-            InflateRect(&mut text_rect, -padding, -padding);
-            let line_height = metrics.tmHeight.max(1);
+            text_rect.right -= self.theme.px(8);
             text_rect.bottom =
                 text_rect.top + (text_rect.bottom - text_rect.top) / line_height * line_height;
             SendMessageW(
@@ -471,17 +709,118 @@ impl App {
                 LPARAM(&text_rect as *const _ as isize),
             );
         }
-        for control in &self.controls {
-            let visible = match control.scope {
-                Scope::Global => true,
-                Scope::Section(page) => page == self.view.page.get(),
-                Scope::Diagnostic(tab) => {
-                    self.view.page.get() == Page::Diagnostics
-                        && tab == self.view.diagnostic_tab.get()
-                }
-            };
-            ShowWindow(control.handle, if visible { SW_SHOWNA } else { SW_HIDE });
-        }
         InvalidateRect(self.window, None, false);
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    const SIZES: [(i32, i32); 4] = [
+        (MIN_WIDTH, MIN_HEIGHT),
+        (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+        (1280, 800),
+        (1920, 1009),
+    ];
+
+    fn every_plan() -> Vec<(String, i32, i32, Plan)> {
+        let mut plans = Vec::new();
+        for (width, height) in SIZES {
+            for page in [Page::Triggers, Page::Settings, Page::Credits] {
+                for listening in [false, true] {
+                    plans.push((
+                        format!("{} {width}x{height} {listening}", page.id()),
+                        width,
+                        height,
+                        plan(page, DiagnosticTab::Activity, listening, width, height),
+                    ));
+                }
+            }
+            for tab in [DiagnosticTab::Activity, DiagnosticTab::Checks] {
+                plans.push((
+                    format!("diagnostics {} {width}x{height}", tab.id()),
+                    width,
+                    height,
+                    plan(Page::Diagnostics, tab, false, width, height),
+                ));
+            }
+        }
+        plans
+    }
+
+    #[test]
+    fn every_page_fits_its_window_without_overlap() {
+        for (name, width, height, plan) in every_plan() {
+            let client = Rect::new(0, 0, width, height);
+            for (id, rect) in &plan.items {
+                assert!(rect.w > 0 && rect.h > 0, "{name}: control {id} is empty");
+                assert!(
+                    client.contains(*rect),
+                    "{name}: control {id} leaves the window"
+                );
+                let sidebar = rect.right() <= SIDEBAR;
+                assert!(
+                    sidebar || rect.x >= LEFT,
+                    "{name}: control {id} crosses the sidebar"
+                );
+            }
+            for (index, (first, a)) in plan.items.iter().enumerate() {
+                for (second, b) in &plan.items[index + 1..] {
+                    assert!(
+                        !a.overlaps(*b),
+                        "{name}: controls {first} and {second} overlap"
+                    );
+                }
+            }
+            let content = Rect::new(LEFT, TOP, width - LEFT - MARGIN, height - FOOTER - 20 - TOP);
+            for card in plan.cards.iter().chain(&plan.tracks) {
+                assert!(
+                    content.contains(*card),
+                    "{name}: card {card:?} leaves the content area"
+                );
+            }
+            for (id, rect) in &plan.items {
+                for card in &plan.cards {
+                    assert!(
+                        !card.overlaps(*rect) || card.contains(*rect),
+                        "{name}: control {id} straddles card {card:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_controls_stay_available_on_every_page() {
+        for (name, _, _, plan) in every_plan() {
+            for id in [
+                NAV_TRIGGERS,
+                NAV_CREDITS,
+                SAVE,
+                HIDE,
+                STATUS,
+                MODE,
+                PAGE_TITLE,
+            ] {
+                assert!(
+                    plan.get(id).is_some(),
+                    "{name}: missing shared control {id}"
+                );
+            }
+            assert!(
+                plan.get(START).is_some() != plan.get(STOP).is_some(),
+                "{name}: exactly one listening control is shown"
+            );
+        }
+    }
+
+    #[test]
+    fn license_paragraphs_flow_with_the_panel() {
+        let text = reflow("MIT License\n\nCopyright (c) 2026\n\nPermission is\nhereby granted\n");
+        assert_eq!(
+            text,
+            "MIT License\r\n\r\nCopyright (c) 2026\r\n\r\nPermission is hereby granted"
+        );
     }
 }

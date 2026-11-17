@@ -10,7 +10,7 @@ The default configuration is `%APPDATA%\VoiceTrigger\settings.json`. The interfa
 
 Select a trigger on **Triggers** to edit it. **Apply changes** updates its row; **Add as new** creates a new row from the current fields; **Remove** removes the selected row. **Save configuration** persists the list and settings, including the selected row's fields. Stop listening before changing settings.
 
-Recognition language, silence threshold and the optional ChatGPT path are on **Settings**. Page navigation retains the form values. Start/Stop and the current listening state remain visible on every page. See the [interface guide](interface.md) for navigation and shortcuts.
+The Light/Dark theme, recognition language, silence threshold and the optional ChatGPT path are on **Settings**. The theme is applied and saved immediately; the other settings are saved with **Save configuration**. Page navigation retains the form values. Start/Stop and the current listening state remain visible on every page. See the [interface guide](interface.md) for navigation and shortcuts.
 
 Keep between 1 and 32 distinct phrases. Matching ignores letter case and repeated spaces. The new-configuration default is “Ok GPT”; saved custom phrases are preserved. Phrases containing “ChatGPT” or a standalone “GPT” also receive spelled-out French letter variants, such as “ok gé pé té” and “ok g p t”.
 
