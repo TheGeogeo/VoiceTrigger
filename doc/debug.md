@@ -1,6 +1,6 @@
 # Live debugging
 
-Click **Start listening**, then say the configured phrase. **Live debug** is enabled by default while the window is visible. The lower panel shows input level, incoming audio updates, and a journal timestamped from application startup.
+Click **Start listening**, then say the configured phrase. **Live debug** is enabled by default on **Diagnostics > Activity** while that view is visible. The activity page shows input level, incoming audio updates, and a journal timestamped from application startup.
 
 ## Reading the journal
 
@@ -46,7 +46,7 @@ If a newly built version still closes unexpectedly, record whether it was waitin
 
 ## Resource use and privacy
 
-The input level uses events from the existing SAPI recognizer. No second permanent capture is added. Level updates are limited to about five per second. Hiding the window or disabling **Live debug** removes frequent level, sound, and hypothesis events while keeping trigger recognition active.
+The input level uses events from the existing SAPI recognizer. No second permanent capture is added. Level updates are limited to about five per second. Hiding the window, leaving the Activity view, or disabling **Live debug** removes frequent level, sound, and hypothesis events while keeping trigger recognition active.
 
 During ChatGPT dictation, the level uses the existing WinMM silence-detection buffers. SAPI and WinMM percentages use different calibration and do not represent recognition confidence.
 

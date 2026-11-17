@@ -14,8 +14,8 @@ cargo build --release --locked
 ```
 
 1. Edit the trigger phrase and select its action.
-2. Click **Save**, then **Start listening**.
-3. Check the microphone level and **Live debug** journal. Say **“Ok GPT”** and look for **Recognized**, **Trigger detected**, and **Running action**.
+2. Click **Save configuration**, then **Start listening**.
+3. Open **Diagnostics > Activity** for the microphone level and **Live debug** journal. Say **“Ok GPT”** and look for **Recognized**, **Trigger detected**, and **Running action**.
 4. For ChatGPT dictation, wait for the readiness tone before asking your question.
 5. After speech, three seconds of silence confirm dictation and send the transcription when ChatGPT exposes the required controls.
 6. Click **Hide to tray** to keep listening in the background. Closing or minimizing the window also hides it.
@@ -23,6 +23,14 @@ cargo build --release --locked
 Double-click the notification icon to restore the window. Its menu can stop listening or quit. **Quit** closes the application completely. Only one instance runs at a time; launching it again restores the existing window. Listening starts only after **Start listening** is clicked.
 
 **“Ok GPT”** is the default for new configurations. Existing saved trigger phrases are preserved. Edit and save your selected trigger if you want to change an existing configuration.
+
+## Interface
+
+![VoiceTrigger with default trigger settings](doc/images/interface.png)
+
+The resizable native interface has four pages: **Triggers**, **Settings**, **Diagnostics**, and **Credits**. Start/Stop, configuration saving and hiding to the notification area remain available across pages. Diagnostics separates live activity from full system-check reports. Credits includes the author, version, project links and MIT license.
+
+Use **File**, **View**, and **Help** for menu commands. **Ctrl+1** through **Ctrl+4** switch pages, **Ctrl+S** saves, and **F1** opens Credits. See the [interface guide](doc/interface.md).
 
 ## Available actions
 
@@ -36,6 +44,7 @@ ChatGPT integration depends on the installed app's accessible controls. Open Cha
 ## Documentation
 
 - [Usage and troubleshooting](doc/usage.md)
+- [Interface and keyboard navigation](doc/interface.md)
 - [Live debugging and microphone detection](doc/debug.md)
 - [ChatGPT integration and limitations](doc/chatgpt.md)
 - [Architecture and resource use](doc/architecture.md)

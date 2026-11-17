@@ -18,6 +18,7 @@ pub enum Event {
     Status(String),
     Stopped,
     DiagnosticDone,
+    DiagnosticReport(String),
     Trace(String),
     AudioLevel(u8),
 }

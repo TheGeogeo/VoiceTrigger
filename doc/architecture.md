@@ -5,7 +5,10 @@
 - `src/config.rs`: trigger definitions, validation, and atomic JSON persistence.
 - `src/silence.rs`: the platform-independent silence state machine.
 - `src/journal.rs`: bounded in-memory debug history, without disk writes.
-- `src/platform/ui.rs`: native Win32 controls and notification icon.
+- `src/platform/ui.rs`: native application state, commands, menus, window lifecycle and notification icon.
+- `src/platform/ui/layout.rs`: page controls, visibility and responsive logical layout.
+- `src/platform/ui/style.rs`: GDI colors, fonts, cards and owner-drawn native buttons/list rows.
+- `src/platform/ui/tests.rs`: opt-in isolated native form/lifecycle checks and window-only rendering.
 - `src/platform/speech.rs`: local SAPI recognition restricted to configured phrases.
 - `src/platform/audio.rs`: temporary WinMM capture and RMS calculation.
 - `src/platform/chatgpt.rs`: scoped ChatGPT window discovery and accessible control invocation.
@@ -15,7 +18,7 @@
 
 The interface sleeps in the Windows message loop. No embedded browser, continuous renderer, GUI timer, or periodic network request is added. The SAPI worker waits on a native event in 100 ms intervals so it can respond to cancellation. WinMM capture and UI Automation searches run only during an action or diagnostic.
 
-With the window visible, **Live debug** displays SAPI audio and speech events with at most five level updates per second. Hiding the window removes frequent events while keeping trigger recognition active. No additional permanent audio stream is opened. See [live debugging](debug.md).
+With **Diagnostics > Activity** visible, **Live debug** displays SAPI audio and speech events with at most five level updates per second. Hiding the window or leaving Activity removes frequent events while keeping trigger recognition active. No additional permanent audio stream is opened. See [live debugging](debug.md).
 
 SAPI itself uses resources to recognize speech. There is no promise of zero usage or a universal footprint; load depends on the Windows engine, microphone, and hardware. Measure the release build on the target machine.
 
@@ -32,3 +35,11 @@ COM interfaces stay on their owning thread. Stop requests use atomics. Status an
 ## Verification boundaries
 
 Tests cover invalid settings, duplicate phrases, persistence replacement, silence boundaries, bounded debug history, real microphone buffers, actual SAPI input attachment, live audio events, and synthetic phrase dispatch. Compilation or emulation alone does not prove spoken accuracy or compatibility with a particular ChatGPT version. Complete an oral test and review transcription on the target environment.
+
+## Interface lifecycle
+
+Triggers, Settings, Diagnostics and Credits share a single worker and persistent form controls. Page changes show/hide existing controls rather than rebuilding state. Native File/View/Help menus and accelerators use the same guarded commands as buttons. Editing and saving are disabled during listening, including command paths reached through keyboard shortcuts.
+
+The window uses per-monitor DPI awareness, scales Segoe UI fonts and layout, and handles Windows' suggested DPI-change rectangle. GDI painting runs on demand; there is no animation loop. Native buttons, list boxes and edit controls retain Windows keyboard/accessibility semantics, with visible focus indicators. Painting resources are separate from the RefCell-protected application state so synchronous native painting cannot create an overlapping mutable application reference. Window destruction precedes resource cleanup.
+
+MSVC builds embed the application manifest from `resources/voice-trigger.manifest` through `build.rs`, enabling Common Controls v6 and declaring per-monitor DPI awareness. See Microsoft’s [application manifest reference](https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests). Native notifications deferred during a reentrant application borrow are reposted after the outer callback releases it, preserving final worker events without a polling timer.

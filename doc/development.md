@@ -33,6 +33,8 @@ cargo test --locked -- --include-ignored --test-threads=1
 
 The full suite includes a 220-second real-microphone SAPI soak, with a recognizer restart and both live-debug settings. See [native crash diagnostics](debug.md#unexpected-application-termination) for the original null-pointer regression and a focused soak command. When only SAPI changes, unrelated ChatGPT desktop tests can be skipped explicitly; report those omissions rather than claiming a complete desktop rerun.
 
+Interface changes also have an [isolated native desktop test](interface.md#native-interface-verification) that exercises real controls and creates window-only captures for review. It is ignored in ordinary test runs and included in the explicit full suite. Inspect actual output at minimum size and scaled layouts; a successful build alone is insufficient.
+
 Documentation-only changes require review of content, commands, and links; they do not need tests that mirror the text.
 
 Before committing or pushing, inspect staged files and [privacy exclusions](privacy.md). `ForAi.md` is versioned without sensitive information. Local tracking, AI working directories, and personal configurations remain excluded. Preserve a configured GitHub no-reply commit address when email privacy is required.

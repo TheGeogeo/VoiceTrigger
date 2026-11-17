@@ -8,13 +8,15 @@ The default configuration is `%APPDATA%\VoiceTrigger\settings.json`. The interfa
 .\target\release\voice-trigger.exe --config .\settings.json
 ```
 
-Select a trigger to edit it. **Apply to selected trigger** updates its row; **Add** creates a new row; **Save** persists the list and settings. Saving also applies the selected row's fields. Stop listening before changing settings.
+Select a trigger on **Triggers** to edit it. **Apply changes** updates its row; **Add as new** creates a new row from the current fields; **Remove** removes the selected row. **Save configuration** persists the list and settings, including the selected row's fields. Stop listening before changing settings.
+
+Recognition language, silence threshold and the optional ChatGPT path are on **Settings**. Page navigation retains the form values. Start/Stop and the current listening state remain visible on every page. See the [interface guide](interface.md) for navigation and shortcuts.
 
 Keep between 1 and 32 distinct phrases. Matching ignores letter case and repeated spaces. The new-configuration default is “Ok GPT”; saved custom phrases are preserved. Phrases containing “ChatGPT” or a standalone “GPT” also receive spelled-out French letter variants, such as “ok gé pé té” and “ok g p t”.
 
 ## Live feedback
 
-Enable **Live debug** to see the selected microphone, input level, audio activity, recognized or rejected phrases, and action errors. At startup, **Armed trigger** lists the phrases being watched. A successful match produces **Recognized**, **Trigger detected**, and **Running action** entries. See [live debugging](debug.md).
+Enable **Live debug** on **Diagnostics > Activity** to see the selected microphone, input level, audio activity, recognized or rejected phrases, and action errors. At startup, **Armed trigger** lists the phrases being watched. A successful match produces **Recognized**, **Trigger detected**, and **Running action** entries. See [live debugging](debug.md).
 
 ## Microphone and silence
 
@@ -32,6 +34,6 @@ An empty recording is cancelled after 15 seconds. A recording longer than 120 se
 - **Phrase rejected:** check the recognition language, pronounce the configured phrase clearly, and try a longer phrase. Recognition can produce misses and false matches.
 - **No ChatGPT window:** open ChatGPT once or supply its executable path. VoiceTrigger can reuse the path of an existing ChatGPT process.
 - **Multiple ChatGPT windows:** bring the intended window to the foreground before saying the trigger.
-- **ChatGPT control unavailable:** use **Diagnostics**, select the Chat view, and read [ChatGPT integration](chatgpt.md).
+- **ChatGPT control unavailable:** use **Diagnostics > System checks > Run checks**, select the Chat view, and read [ChatGPT integration](chatgpt.md).
 
 Integration errors stop listening to avoid retriggering while recording may still be open. Correct the problem, then click **Start listening** again.
